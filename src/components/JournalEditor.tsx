@@ -620,7 +620,7 @@ export function JournalEditor({ date, onDateChange, minDate, accentColor = "bg-i
                 <button
                     onPointerDown={handleCameraDown}
                     onPointerUp={handleCameraUp}
-                    onPointerLeave={(e) => {
+                    onPointerLeave={(_e) => {
                         if (cameraLongPressTimerRef.current) {
                             clearTimeout(cameraLongPressTimerRef.current);
                             cameraLongPressTimerRef.current = null;
