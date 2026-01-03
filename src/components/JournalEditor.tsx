@@ -664,7 +664,7 @@ export function JournalEditor({
                         if (isGuest) return;
                         handleCameraUp(e);
                     }}
-                    onPointerLeave={(e) => {
+                    onPointerLeave={() => {
                         if (isGuest) return;
                         if (cameraLongPressTimerRef.current) {
                             clearTimeout(cameraLongPressTimerRef.current);
