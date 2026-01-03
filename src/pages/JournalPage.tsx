@@ -6,6 +6,7 @@ import { CalendarOverlay } from "@/components/CalendarOverlay";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { supabase } from "@/utils/supabase/client";
 import { useNavigate } from "react-router-dom";
+import { SignInModal } from "@/components/SignInModal";
 
 export function JournalPage() {
     const [showCalendar, setShowCalendar] = useState(false);
@@ -48,12 +49,20 @@ export function JournalPage() {
         setShowCalendar(false);
     };
 
+    const [isGuest, setIsGuest] = useState(false);
+    const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+    const [showAuthModal, setShowAuthModal] = useState(false);
+
     // Auth & Initial Data Fetch
     useEffect(() => {
         const initData = async () => {
-            const { data: { user } } = await supabase.auth.getUser();
+            const { data: { user } } = await supabase.auth.getSession().then(({ data }) => ({ data: { user: data.session?.user || null } }));
+
             if (!user) {
-                navigate('/auth');
+                // Determine if we are in "guest preview" mode (redirected from Landing Page "Start Writing")
+                // For now, if no user, we assume guest mode if they landed on /app
+                setIsGuest(true);
+                setIsLoadingAuth(false);
                 return;
             }
 
@@ -82,6 +91,7 @@ export function JournalPage() {
                 }
                 // Handle voice enabled if we add it to state
             }
+            setIsLoadingAuth(false);
         };
         initData();
     }, [navigate]);
@@ -131,11 +141,25 @@ export function JournalPage() {
         }
     };
 
+    if (isLoadingAuth) {
+        return (
+            <div className="min-h-screen bg-zinc-50 dark:bg-[#09090b] flex items-center justify-center">
+                <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-900 dark:border-zinc-700 dark:border-t-white rounded-full animate-spin"></div>
+            </div>
+        );
+    }
+
     return (
         <div className="flex min-h-screen flex-col items-center w-full font-sans animate-in fade-in duration-700">
             <Header
                 onOpenCalendar={handleOpenCalendar}
-                onOpenSettings={() => setShowSettings(true)}
+                onOpenSettings={() => {
+                    if (isGuest) {
+                        setShowAuthModal(true);
+                        return;
+                    }
+                    setShowSettings(true);
+                }}
                 isDark={isDark}
                 toggleTheme={() => setIsDark(!isDark)}
                 accentColor={accentColor}
@@ -146,6 +170,8 @@ export function JournalPage() {
                 onDateChange={setSelectedDate}
                 minDate={minDate}
                 accentColor={accentColor}
+                isGuest={isGuest}
+                onGuestAction={() => setShowAuthModal(true)}
             />
 
             {aiEnabled && (
@@ -175,6 +201,11 @@ export function JournalPage() {
                 onToggleAi={toggleAi}
                 accentColor={accentColor}
                 onAccentChange={updateAccentColor}
+            />
+
+            <SignInModal
+                isOpen={showAuthModal}
+                onClose={() => setShowAuthModal(false)}
             />
         </div>
     );

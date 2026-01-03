@@ -13,9 +13,18 @@ interface JournalEditorProps {
     onDateChange: (date: Date) => void;
     minDate?: Date;
     accentColor?: string;
+    isGuest?: boolean;
+    onGuestAction?: () => void;
 }
 
-export function JournalEditor({ date, onDateChange, minDate, accentColor = "bg-indigo-500" }: JournalEditorProps) {
+export function JournalEditor({
+    date,
+    onDateChange,
+    minDate,
+    accentColor = "bg-indigo-500",
+    isGuest = false,
+    onGuestAction
+}: JournalEditorProps) {
     const [content, setContent] = useState("");
     const [imagePath, setImagePath] = useState<string | null>(null);
     const [displayUrl, setDisplayUrl] = useState<string | null>(null);
@@ -530,8 +539,24 @@ export function JournalEditor({ date, onDateChange, minDate, accentColor = "bg-i
                     ref={textareaRef}
                     value={content}
                     onChange={(e) => {
+                        if (isGuest && onGuestAction) {
+                            onGuestAction();
+                            return;
+                        }
                         setContent(e.target.value);
                         adjustTextareaHeight();
+                    }}
+                    onFocus={(e) => {
+                        if (isGuest && onGuestAction) {
+                            e.target.blur();
+                            onGuestAction();
+                        }
+                    }}
+                    onClick={(e) => {
+                        if (isGuest && onGuestAction) {
+                            e.currentTarget.blur();
+                            onGuestAction();
+                        }
                     }}
                     placeholder={isDragging ? "Drop image here..." : "One line for today..."}
                     className="w-full bg-transparent text-xl md:text-2xl text-[#18181b] dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-600 resize-none outline-none min-h-[150px] text-left md:text-center font-light leading-relaxed scrollbar-hide p-6 md:p-4 overflow-hidden"
@@ -590,9 +615,19 @@ export function JournalEditor({ date, onDateChange, minDate, accentColor = "bg-i
             {/* Action Bar */}
             <div className="flex w-full justify-center gap-6 mt-4 select-none">
                 <button
-                    onPointerDown={handleMicDown}
-                    onPointerUp={handleMicUp}
+                    onPointerDown={(e) => {
+                        if (isGuest && onGuestAction) {
+                            onGuestAction();
+                            return;
+                        }
+                        handleMicDown(e);
+                    }}
+                    onPointerUp={(e) => {
+                        if (isGuest) return;
+                        handleMicUp(e);
+                    }}
                     onPointerLeave={(e) => {
+                        if (isGuest) return;
                         if (isLongPressRef.current) handleMicUp(e);
                         else if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
                     }}
@@ -618,9 +653,19 @@ export function JournalEditor({ date, onDateChange, minDate, accentColor = "bg-i
                     </span>
                 </button>
                 <button
-                    onPointerDown={handleCameraDown}
-                    onPointerUp={handleCameraUp}
-                    onPointerLeave={(_e) => {
+                    onPointerDown={(e) => {
+                        if (isGuest && onGuestAction) {
+                            onGuestAction();
+                            return;
+                        }
+                        handleCameraDown(e);
+                    }}
+                    onPointerUp={(e) => {
+                        if (isGuest) return;
+                        handleCameraUp(e);
+                    }}
+                    onPointerLeave={(e) => {
+                        if (isGuest) return;
                         if (cameraLongPressTimerRef.current) {
                             clearTimeout(cameraLongPressTimerRef.current);
                             cameraLongPressTimerRef.current = null;
