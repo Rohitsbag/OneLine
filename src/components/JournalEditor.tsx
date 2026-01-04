@@ -632,7 +632,14 @@ export function JournalEditor({
 
             // Check Network Tier
             const { detectNetworkTier, getSTTModel } = await import("@/utils/stt-tiered");
-            const tier = detectNetworkTier();
+            let tier = detectNetworkTier();
+
+            // SECURITY: Force offline if no active session (prevents 401 Unauthorized loops)
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) {
+                console.log("No active session. Forcing Offline STT.");
+                tier = "offline";
+            }
 
             if (tier === "offline") {
                 // === OFFLINE MODE: Web Speech API ===
@@ -789,15 +796,22 @@ export function JournalEditor({
         // Check if online for high-quality OCR
         const isOnline = navigator.onLine;
 
-        if (!isOnline) {
+        // SECURITY: Check for session to avoid 401s
+        const { data: { session } } = await supabase.auth.getSession();
+        const hasSession = !!session;
+
+        if (!isOnline || !hasSession) {
             // Show quality notice for offline mode
-            alert("📶 Connect to internet for higher quality scan.\n\nUsing offline OCR (may be less accurate for handwriting).");
+            alert(hasSession
+                ? "📶 Connect to internet for higher quality scan.\n\nUsing offline OCR (may be less accurate for handwriting)."
+                : "👤 Sign in for high-quality AI scan.\n\nUsing offline OCR (basic)."
+            );
         }
 
         try {
             let text = "";
 
-            if (isOnline) {
+            if (isOnline && hasSession) {
                 // ONLINE: Use Groq Vision API (high quality)
                 const compressedBlob = await compressImage(file);
                 const compressedFile = new File([compressedBlob], file.name, { type: 'image/webp' });
