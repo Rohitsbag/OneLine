@@ -310,8 +310,13 @@ export function JournalEditor({
 
             mediaRecorder.start();
             setIsRecordingAudio(true);
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error starting audio:", error);
+            if (error.name === 'NotAllowedError') {
+                alert("Microphone access denied. If you are using the Android app, please ensure Microphone permissions are enabled in the App Settings.");
+            } else {
+                alert("Could not start microphone: " + error.message);
+            }
         }
     };
 
@@ -358,6 +363,11 @@ export function JournalEditor({
             };
             recognition.onerror = (e: any) => {
                 console.warn('Speech recognition error:', e.error);
+                if (e.error === 'not-allowed') {
+                    alert("Speech recognition permission denied. Please check your system/app settings.");
+                } else if (e.error === 'network') {
+                    alert("Speech recognition failed: Network error. Please check your connection.");
+                }
                 setIsRecording(false);
                 recognitionRef.current = null;
             };
