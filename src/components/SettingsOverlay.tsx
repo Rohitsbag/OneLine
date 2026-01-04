@@ -17,10 +17,6 @@ interface SettingsOverlayProps {
 export function SettingsOverlay({ isOpen, onClose, aiEnabled, onToggleAi, accentColor = "bg-indigo-500", onAccentChange }: SettingsOverlayProps) {
     const [email, setEmail] = useState<string | null>(null);
     const navigate = useNavigate();
-    /* ... skipping unchanged lines is better handled by concise replacements but context is needed ... */
-    /* ... I will replace the top interface and function signature, and the specific toggle section ... */
-    /* Actually, I should use TWO chunks for cleaner edits if possible, OR one large one if context overlaps significantly. */
-    /* The props change is at the top, the toggle UI is in the middle. I'll use multi_replace for accuracy. */
 
     useEffect(() => {
         if (isOpen) {
@@ -40,12 +36,21 @@ export function SettingsOverlay({ isOpen, onClose, aiEnabled, onToggleAi, accent
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        const { data: entries } = await supabase
+        // SCALABILITY: Limit export to prevent memory issues on long-term users
+        const EXPORT_LIMIT = 1000;
+        const { data: entries, count } = await supabase
             .from('entries')
-            .select('*')
-            .eq('user_id', user.id);
+            .select('*', { count: 'exact' })
+            .eq('user_id', user.id)
+            .order('date', { ascending: false })
+            .limit(EXPORT_LIMIT);
 
         if (!entries) return;
+
+        // Warn user if data was truncated
+        if (count && count > EXPORT_LIMIT) {
+            alert(`Note: Export limited to most recent ${EXPORT_LIMIT} entries. You have ${count} total entries.`);
+        }
 
         const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);

@@ -58,6 +58,17 @@ export function JournalEditor({
     const [isProcessingOCR, setIsProcessingOCR] = useState(false);
     const ocrFileInputRef = useRef<HTMLInputElement>(null);
 
+    // === BUG FIX REFS ===
+    // Prevents data loss on fast navigation - tracks if content needs saving
+    const isDirtyRef = useRef(false);
+    // Prevents memory leaks - guards async state updates after unmount
+    const isMountedRef = useRef(true);
+    // Prevents SST duplication - tracks last appended transcript
+    const lastAppendedTextRef = useRef("");
+    // Recording timer state
+    const [recordingDuration, setRecordingDuration] = useState(0);
+    const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
     const currentDate = date;
 
     // Auth & Initial Fetch
@@ -73,6 +84,8 @@ export function JournalEditor({
 
     // Cleanup: Stop any active recordings and close menus on unmount
     useEffect(() => {
+        isMountedRef.current = true;
+
         const handleClickOutside = (event: MouseEvent) => {
             if (micMenuRef.current && !micMenuRef.current.contains(event.target as Node)) {
                 setShowMicMenu(false);
@@ -85,6 +98,7 @@ export function JournalEditor({
         document.addEventListener("mousedown", handleClickOutside);
 
         return () => {
+            isMountedRef.current = false;
             document.removeEventListener("mousedown", handleClickOutside);
             // Stop SpeechRecognition if active
             if (recognitionRef.current) {
@@ -96,6 +110,10 @@ export function JournalEditor({
             // Stop MediaRecorder if active
             if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
                 mediaRecorderRef.current.stop();
+            }
+            // Clear recording timer
+            if (recordingTimerRef.current) {
+                clearInterval(recordingTimerRef.current);
             }
         };
     }, []);
@@ -118,27 +136,67 @@ export function JournalEditor({
     }, [userId]);
 
     const syncPendingData = async () => {
-        const pending = localStorage.getItem('pending_journal_sync');
-        if (pending && userId) {
-            setPendingSync(true);
-            try {
-                const { date, content } = JSON.parse(pending);
+        const pendingRaw = localStorage.getItem('pending_journal_sync');
+        if (!pendingRaw || !userId) return;
+
+        setPendingSync(true);
+        try {
+            const pendingEntries = JSON.parse(pendingRaw) as Record<string, { content: string; image_url?: string; audio_url?: string; updated_at?: string }>;
+            const dates = Object.keys(pendingEntries);
+
+            for (const dateKey of dates) {
+                const entry = pendingEntries[dateKey];
+                const localTimestamp = entry.updated_at ? new Date(entry.updated_at).getTime() : Date.now();
+
+                // CONFLICT RESOLUTION: Check server timestamp first
+                const { data: serverEntry } = await supabase
+                    .from('entries')
+                    .select('updated_at')
+                    .eq('user_id', userId)
+                    .eq('date', dateKey)
+                    .single();
+
+                // Only sync if local is newer or no server entry exists
+                if (serverEntry?.updated_at) {
+                    const serverTimestamp = new Date(serverEntry.updated_at).getTime();
+                    if (serverTimestamp > localTimestamp) {
+                        // Server is newer - skip this entry, remove from pending
+                        console.log(`Skipping ${dateKey}: server has newer data`);
+                        delete pendingEntries[dateKey];
+                        continue;
+                    }
+                }
+
                 const { error } = await supabase
                     .from('entries')
                     .upsert({
                         user_id: userId,
-                        date: date,
-                        content: content,
+                        date: dateKey,
+                        content: entry.content,
+                        image_url: entry.image_url || null,
+                        audio_url: entry.audio_url || null,
                         updated_at: new Date().toISOString()
                     }, { onConflict: 'user_id, date' });
 
                 if (!error) {
-                    localStorage.removeItem('pending_journal_sync');
-                    console.log("Synced pending data");
+                    // Remove this date from pending
+                    delete pendingEntries[dateKey];
+                    console.log(`Synced pending data for ${dateKey}`);
+                } else {
+                    console.error(`Failed to sync ${dateKey}:`, error);
                 }
-            } catch (e) {
-                console.error("Sync failed", e);
-            } finally {
+            }
+
+            // Update or clear localStorage
+            if (Object.keys(pendingEntries).length === 0) {
+                localStorage.removeItem('pending_journal_sync');
+            } else {
+                localStorage.setItem('pending_journal_sync', JSON.stringify(pendingEntries));
+            }
+        } catch (e) {
+            console.error("Sync failed", e);
+        } finally {
+            if (isMountedRef.current) {
                 setPendingSync(false);
             }
         }
@@ -166,10 +224,13 @@ export function JournalEditor({
             console.error('Error fetching entry:', error);
         }
 
-        setContent(data?.content || "");
-        setImagePath(data?.image_url || null);
-        setAudioPath(data?.audio_url || null);
-        setIsLoading(false);
+        // MEMORY LEAK GUARD: Only update state if still mounted
+        if (isMountedRef.current) {
+            setContent(data?.content || "");
+            setImagePath(data?.image_url || null);
+            setAudioPath(data?.audio_url || null);
+            setIsLoading(false);
+        }
     }, [currentDate, userId]);
 
     useEffect(() => {
@@ -178,95 +239,132 @@ export function JournalEditor({
 
     // Image Signed URL
     useEffect(() => {
+        let cancelled = false;
         const loadSignedUrl = async () => {
             if (!imagePath) {
-                setDisplayUrl(null);
+                if (isMountedRef.current && !cancelled) setDisplayUrl(null);
                 return;
             }
             if (imagePath.startsWith('http')) {
-                setDisplayUrl(imagePath);
+                if (isMountedRef.current && !cancelled) setDisplayUrl(imagePath);
                 return;
             }
             const { data } = await supabase.storage
                 .from('journal-media-private')
                 .createSignedUrl(imagePath, 3600 * 24);
 
-            if (data?.signedUrl) {
+            if (data?.signedUrl && isMountedRef.current && !cancelled) {
                 setDisplayUrl(data.signedUrl);
             }
         };
         loadSignedUrl();
+        return () => { cancelled = true; };
     }, [imagePath]);
 
     // Audio Signed URL
     useEffect(() => {
+        let cancelled = false;
         const loadAudioUrl = async () => {
             if (!audioPath) {
-                setAudioDisplayUrl(null);
+                if (isMountedRef.current && !cancelled) setAudioDisplayUrl(null);
                 return;
             }
             if (audioPath.startsWith('http')) {
-                setAudioDisplayUrl(audioPath);
+                if (isMountedRef.current && !cancelled) setAudioDisplayUrl(audioPath);
                 return;
             }
             const { data } = await supabase.storage
                 .from('journal-media-private')
                 .createSignedUrl(audioPath, 3600 * 24);
 
-            if (data?.signedUrl) {
+            if (data?.signedUrl && isMountedRef.current && !cancelled) {
                 setAudioDisplayUrl(data.signedUrl);
             }
         };
         loadAudioUrl();
+        return () => { cancelled = true; };
     }, [audioPath]);
 
-    // Save Entry (Debounced)
+    // Save Entry (Debounced with dirty flag to prevent data loss)
+    const saveEntry = useCallback(async (dateStr: string, currentContent: string, currentImagePath: string | null, currentAudioPath: string | null) => {
+        if (!userId) return;
+
+        // Helper to save to offline storage (date-keyed)
+        const saveOffline = () => {
+            const existingRaw = localStorage.getItem('pending_journal_sync');
+            const existing = existingRaw ? JSON.parse(existingRaw) : {};
+            existing[dateStr] = {
+                content: currentContent,
+                image_url: currentImagePath,
+                audio_url: currentAudioPath
+            };
+            localStorage.setItem('pending_journal_sync', JSON.stringify(existing));
+        };
+
+        if (!navigator.onLine) {
+            saveOffline();
+            if (isMountedRef.current) {
+                setIsOffline(true);
+                setIsSaving(false);
+            }
+            isDirtyRef.current = false;
+            return;
+        }
+
+        const { error } = await supabase
+            .from('entries')
+            .upsert({
+                user_id: userId,
+                date: dateStr,
+                content: currentContent,
+                image_url: currentImagePath,
+                audio_url: currentAudioPath,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id, date' });
+
+        if (isMountedRef.current) {
+            if (error) {
+                console.error('Error saving:', error);
+                setHasError(true);
+                saveOffline(); // Fallback
+            } else {
+                setHasError(false);
+                // Remove this date from pending if it exists
+                const existingRaw = localStorage.getItem('pending_journal_sync');
+                if (existingRaw) {
+                    const existing = JSON.parse(existingRaw);
+                    delete existing[dateStr];
+                    if (Object.keys(existing).length === 0) {
+                        localStorage.removeItem('pending_journal_sync');
+                    } else {
+                        localStorage.setItem('pending_journal_sync', JSON.stringify(existing));
+                    }
+                }
+            }
+            setIsSaving(false);
+        }
+        isDirtyRef.current = false;
+    }, [userId]);
+
     useEffect(() => {
         if (!userId || isLoading) return;
         const dateStr = format(currentDate, 'yyyy-MM-dd');
 
-        const timeoutId = setTimeout(async () => {
-            setIsSaving(true);
+        isDirtyRef.current = true;
 
-            // Offline Logic
-            if (!navigator.onLine) {
-                localStorage.setItem('pending_journal_sync', JSON.stringify({
-                    date: dateStr,
-                    content: content
-                }));
-                setIsOffline(true);
-                setIsSaving(false);
-                return;
-            }
-
-            const { error } = await supabase
-                .from('entries')
-                .upsert({
-                    user_id: userId,
-                    date: dateStr,
-                    content: content,
-                    image_url: imagePath,
-                    audio_url: audioPath,
-                    updated_at: new Date().toISOString()
-                }, { onConflict: 'user_id, date' });
-
-            if (error) {
-                console.error('Error saving:', error);
-                setHasError(true);
-                // Fallback to local storage on error
-                localStorage.setItem('pending_journal_sync', JSON.stringify({
-                    date: dateStr,
-                    content: content
-                }));
-            } else {
-                setHasError(false);
-                localStorage.removeItem('pending_journal_sync');
-            }
-            setIsSaving(false);
+        const timeoutId = setTimeout(() => {
+            if (isMountedRef.current) setIsSaving(true);
+            saveEntry(dateStr, content, imagePath, audioPath);
         }, 1000);
 
-        return () => clearTimeout(timeoutId);
-    }, [content, imagePath, audioPath, currentDate, userId, isLoading]);
+        return () => {
+            clearTimeout(timeoutId);
+            // CRITICAL: Flush save immediately on cleanup if dirty
+            if (isDirtyRef.current && userId) {
+                saveEntry(dateStr, content, imagePath, audioPath);
+            }
+        };
+    }, [content, imagePath, audioPath, currentDate, userId, isLoading, saveEntry]);
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -286,6 +384,11 @@ export function JournalEditor({
     const processFile = async (file: File) => {
         if (!userId) return;
 
+        // MEMORY LEAK: Revoke previous object URL if exists
+        if (displayUrl) {
+            URL.revokeObjectURL(displayUrl);
+        }
+
         setIsUploading(true);
         const objectUrl = URL.createObjectURL(file);
         setDisplayUrl(objectUrl);
@@ -300,15 +403,23 @@ export function JournalEditor({
                 .upload(fileName, compressedFile);
 
             if (uploadError) throw uploadError;
-            setImagePath(fileName);
+
+            // MEMORY LEAK GUARD: Only update state if still mounted
+            if (isMountedRef.current) {
+                setImagePath(fileName);
+            }
 
         } catch (error) {
             console.error("Image upload failed:", error);
-            alert("Failed to upload image.");
-            setDisplayUrl(null);
-            setImagePath(null);
+            if (isMountedRef.current) {
+                alert("Failed to upload image.");
+                setDisplayUrl(null);
+                setImagePath(null);
+            }
         } finally {
-            setIsUploading(false);
+            if (isMountedRef.current) {
+                setIsUploading(false);
+            }
         }
     };
 
@@ -320,6 +431,10 @@ export function JournalEditor({
 
     const removeImage = async () => {
         if (!userId || !imagePath) return;
+
+        // UX SAFETY: Confirm before deletion
+        if (!confirm("Delete this image? This cannot be undone.")) return;
+
         const pathToDelete = imagePath;
         setImagePath(null);
         setDisplayUrl(null);
@@ -340,7 +455,21 @@ export function JournalEditor({
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const mediaRecorder = new MediaRecorder(stream);
+
+            // MOBILE COMPATIBILITY: Check supported MIME types
+            let mimeType = 'audio/webm';
+            if (typeof MediaRecorder.isTypeSupported === 'function') {
+                if (MediaRecorder.isTypeSupported('audio/webm')) {
+                    mimeType = 'audio/webm';
+                } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+                    mimeType = 'audio/mp4';
+                } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+                    mimeType = 'audio/ogg';
+                }
+                // If none supported, let browser use default
+            }
+
+            const mediaRecorder = new MediaRecorder(stream, { mimeType });
             mediaRecorderRef.current = mediaRecorder;
             audioChunksRef.current = [];
 
@@ -351,6 +480,15 @@ export function JournalEditor({
             };
 
             mediaRecorder.onstop = async () => {
+                // Stop timer
+                if (recordingTimerRef.current) {
+                    clearInterval(recordingTimerRef.current);
+                    recordingTimerRef.current = null;
+                }
+                if (isMountedRef.current) {
+                    setRecordingDuration(0);
+                }
+
                 const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                 const fileName = `${userId}/audio-${Date.now()}.webm`;
 
@@ -360,13 +498,21 @@ export function JournalEditor({
 
                 if (error) {
                     console.error("Audio upload failed:", error);
+                    // BUG FIX: Make failure visible to user
+                    alert("Voice note upload failed. Please check your connection and try again.");
+                    if (isMountedRef.current) {
+                        setHasError(true);
+                    }
                 } else {
                     // Optimized: If an audio file already exists, delete it to keep "one voice note" rule clean
                     // We do this AFTER successful upload to prevent data loss if upload fails
                     if (audioPath) {
                         await supabase.storage.from('journal-media-private').remove([audioPath]);
                     }
-                    setAudioPath(fileName);
+                    if (isMountedRef.current) {
+                        setAudioPath(fileName);
+                        setHasError(false);
+                    }
                 }
 
                 stream.getTracks().forEach(track => track.stop());
@@ -374,6 +520,14 @@ export function JournalEditor({
 
             mediaRecorder.start();
             setIsRecordingAudio(true);
+
+            // Start recording timer
+            setRecordingDuration(0);
+            recordingTimerRef.current = setInterval(() => {
+                if (isMountedRef.current) {
+                    setRecordingDuration(prev => prev + 1);
+                }
+            }, 1000);
         } catch (error: any) {
             console.error("Error starting audio:", error);
             if (error.name === 'NotAllowedError') {
@@ -388,11 +542,20 @@ export function JournalEditor({
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
             mediaRecorderRef.current.stop();
         }
+        // Stop timer on manual stop
+        if (recordingTimerRef.current) {
+            clearInterval(recordingTimerRef.current);
+            recordingTimerRef.current = null;
+        }
         setIsRecordingAudio(false);
     };
 
     const removeAudio = async () => {
         if (!userId || !audioPath) return;
+
+        // UX SAFETY: Confirm before deletion
+        if (!confirm("Delete this voice note? This cannot be undone.")) return;
+
         const pathToDelete = audioPath;
         setAudioPath(null);
         setAudioDisplayUrl(null);
@@ -419,7 +582,11 @@ export function JournalEditor({
             recognition.interimResults = true;
             recognition.lang = 'en-US';
 
-            recognition.onstart = () => setIsRecording(true);
+            recognition.onstart = () => {
+                setIsRecording(true);
+                // BUG FIX: Reset last appended tracker on new session
+                lastAppendedTextRef.current = "";
+            };
             recognition.onend = () => {
                 setIsRecording(false);
                 // Clear the ref when recognition ends naturally
@@ -444,9 +611,20 @@ export function JournalEditor({
                     }
                 }
                 if (finalTranscript) {
+                    const trimmedFinal = finalTranscript.trim();
+                    // BUG FIX: More robust deduplication using ref
+                    // Skip if this exact text was already appended
+                    if (trimmedFinal === lastAppendedTextRef.current) {
+                        return;
+                    }
+                    // Skip if new text is a substring of what we just added (contextual correction)
+                    if (lastAppendedTextRef.current.includes(trimmedFinal)) {
+                        return;
+                    }
+                    lastAppendedTextRef.current = trimmedFinal;
+
                     setContent(prev => {
-                        const trimmedFinal = finalTranscript.trim();
-                        // Simple deduplication: Check if the last part of content matches the new transcript
+                        // Additional check: don't append if content already ends with this
                         if (prev.trim().endsWith(trimmedFinal)) {
                             return prev;
                         }
@@ -504,21 +682,30 @@ export function JournalEditor({
 
         setIsProcessingOCR(true);
         try {
-            const text = await performOCR(file);
-            if (text) {
+            // BUG FIX: Compress large images before sending to OCR API
+            // Phone cameras produce 5-15MB images which exceed API limits
+            const compressedBlob = await compressImage(file);
+            const compressedFile = new File([compressedBlob], file.name, { type: 'image/webp' });
+
+            const text = await performOCR(compressedFile);
+            if (text && isMountedRef.current) {
                 // Append extracted text to content
                 setContent(prev => {
                     const needsSpace = prev.length > 0 && !prev.endsWith(' ') && !prev.endsWith('\n');
                     return prev + (needsSpace ? '\n\n' : '') + text;
                 });
-            } else {
+            } else if (isMountedRef.current) {
                 alert("Could not extract text from this image.");
             }
         } catch (error) {
             console.error("OCR failed:", error);
-            alert("OCR failed. Please try again.");
+            if (isMountedRef.current) {
+                alert("OCR failed. Please try again.");
+            }
         } finally {
-            setIsProcessingOCR(false);
+            if (isMountedRef.current) {
+                setIsProcessingOCR(false);
+            }
         }
     };
 
@@ -699,7 +886,12 @@ export function JournalEditor({
                         )}
                     >
                         {isRecordingAudio ? (
-                            <AudioLines className="w-5 h-5 text-white animate-pulse" />
+                            <div className="flex items-center gap-1.5">
+                                <AudioLines className="w-5 h-5 text-white animate-pulse" />
+                                <span className="text-white text-xs font-mono">
+                                    {Math.floor(recordingDuration / 60)}:{(recordingDuration % 60).toString().padStart(2, '0')}
+                                </span>
+                            </div>
                         ) : isRecording ? (
                             <Square className="w-5 h-5 text-zinc-900 dark:text-zinc-100" />
                         ) : (

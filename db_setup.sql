@@ -20,7 +20,10 @@ ON entries
 FOR ALL 
 USING (auth.uid() = user_id);
 
--- 5. Refresh: Force API to recognize changes
+-- 5. Performance: Index for date range queries (weekly reflection)
+CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
+
+-- 6. Refresh: Force API to recognize changes
 NOTIFY pgrst, 'reload config';
 
 -- 6. Verification: Check if table and columns exist

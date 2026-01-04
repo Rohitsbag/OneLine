@@ -36,6 +36,9 @@ async function callAIProxy(body: ChatRequest): Promise<string> {
     return data.text || "";
 }
 
+// Maximum base64 size before sending (slightly under 1MB to account for JSON overhead)
+const MAX_BASE64_SIZE = 900 * 1024; // ~900KB
+
 export async function performOCR(imageFile: File): Promise<string> {
     try {
         // Convert image to base64
@@ -46,7 +49,17 @@ export async function performOCR(imageFile: File): Promise<string> {
             reader.onerror = error => reject(error);
         });
 
-        const result = await callAIProxy({
+        // SECURITY: Validate base64 size before sending
+        if (base64Image.length > MAX_BASE64_SIZE) {
+            throw new Error("Image too large. Please use a smaller image or compress it further.");
+        }
+
+        // 30 second timeout for OCR (longer due to vision model processing)
+        const timeoutPromise = new Promise<string>((_, reject) =>
+            setTimeout(() => reject(new Error("OCR Request Timed Out")), 30000)
+        );
+
+        const ocrPromise = callAIProxy({
             action: "chat",
             model: "llama-3.2-11b-vision-preview",
             messages: [
@@ -62,10 +75,14 @@ export async function performOCR(imageFile: File): Promise<string> {
             max_tokens: 1000
         });
 
+        const result = await Promise.race([ocrPromise, timeoutPromise]);
         return result;
     } catch (error) {
         console.error("OCR Error:", error);
-        throw new Error("Failed to extract text from image");
+        if (error instanceof Error && error.message === "OCR Request Timed Out") {
+            throw new Error("OCR is taking too long. Please try again with a smaller image.");
+        }
+        throw new Error(error instanceof Error ? error.message : "Failed to extract text from image");
     }
 }
 

@@ -2,14 +2,44 @@
 // Securely proxies requests to Groq API without exposing the API key
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
+// === SECURITY: Explicit CORS origin ===
+const ALLOWED_ORIGIN = "https://get-one-line.vercel.app";
 const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// === SECURITY: Rate limiting (in-memory, per-user) ===
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const RATE_LIMIT_MAX = 10; // requests per window
+const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
+
+function checkRateLimit(userId: string): boolean {
+    const now = Date.now();
+    const entry = rateLimitMap.get(userId);
+
+    if (!entry || now > entry.resetTime) {
+        rateLimitMap.set(userId, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
+        return true;
+    }
+
+    if (entry.count >= RATE_LIMIT_MAX) {
+        return false;
+    }
+
+    entry.count++;
+    return true;
+}
+
+// === SECURITY: Payload size validation ===
+const MAX_PAYLOAD_SIZE_BYTES = 1024 * 1024; // 1MB
 
 interface RequestBody {
     action: "chat" | "transcribe";
@@ -35,8 +65,55 @@ serve(async (req: Request) => {
         );
     }
 
+    // === SECURITY: Validate JWT token ===
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return new Response(
+            JSON.stringify({ error: "Missing or invalid authorization header" }),
+            { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+    }
+
+    const token = authHeader.replace("Bearer ", "");
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        global: { headers: { Authorization: `Bearer ${token}` } }
+    });
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+        return new Response(
+            JSON.stringify({ error: "Invalid or expired token" }),
+            { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+    }
+
+    // === SECURITY: Rate limit check ===
+    if (!checkRateLimit(user.id)) {
+        return new Response(
+            JSON.stringify({ error: "Rate limit exceeded. Please wait before trying again." }),
+            { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+    }
+
     try {
-        const body: RequestBody = await req.json();
+        // === SECURITY: Payload size check ===
+        const contentLength = req.headers.get("Content-Length");
+        if (contentLength && parseInt(contentLength) > MAX_PAYLOAD_SIZE_BYTES) {
+            return new Response(
+                JSON.stringify({ error: "Payload too large. Maximum size is 1MB." }),
+                { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+        }
+
+        const bodyText = await req.text();
+        if (bodyText.length > MAX_PAYLOAD_SIZE_BYTES) {
+            return new Response(
+                JSON.stringify({ error: "Payload too large. Maximum size is 1MB." }),
+                { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+        }
+
+        const body: RequestBody = JSON.parse(bodyText);
 
         if (body.action === "chat") {
             // Chat Completions

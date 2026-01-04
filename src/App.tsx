@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // Lazy load pages for performance optimization
 export const loadAuthPage = () => import('@/pages/AuthPage');
@@ -30,15 +31,17 @@ function App() {
     }, [location, navigate]);
 
     return (
-        <Suspense fallback={<PageLoader />}>
-            <Routes>
-                <Route path="/" element={<LandingPage />} />
-                <Route path="/auth" element={<AuthPage />} />
-                <Route path="/app" element={<JournalPage />} />
-                <Route path="/privacy" element={<PrivacyPolicy />} />
-                <Route path="/terms" element={<TermsOfService />} />
-            </Routes>
-        </Suspense>
+        <ErrorBoundary>
+            <Suspense fallback={<PageLoader />}>
+                <Routes>
+                    <Route path="/" element={<LandingPage />} />
+                    <Route path="/auth" element={<AuthPage />} />
+                    <Route path="/app" element={<JournalPage />} />
+                    <Route path="/privacy" element={<PrivacyPolicy />} />
+                    <Route path="/terms" element={<TermsOfService />} />
+                </Routes>
+            </Suspense>
+        </ErrorBoundary>
     );
 }
 

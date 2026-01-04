@@ -93,9 +93,14 @@ const AnoAI = () => {
     scene.add(mesh);
 
     let frameId: number;
+    let isVisible = true;
+
     const animate = () => {
-      material.uniforms.iTime.value += 0.002;
-      renderer.render(scene, camera);
+      // PERFORMANCE: Only animate when page is visible
+      if (isVisible) {
+        material.uniforms.iTime.value += 0.002;
+        renderer.render(scene, camera);
+      }
       frameId = requestAnimationFrame(animate);
     };
     animate();
@@ -109,9 +114,16 @@ const AnoAI = () => {
     };
     window.addEventListener('resize', handleResize);
 
+    // PERFORMANCE: Pause animation when tab is hidden
+    const handleVisibilityChange = () => {
+      isVisible = !document.hidden;
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       cancelAnimationFrame(frameId);
       window.removeEventListener('resize', handleResize);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (container && renderer.domElement) {
         container.removeChild(renderer.domElement);
       }
