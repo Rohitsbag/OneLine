@@ -1,0 +1,24 @@
+---------------------------------------------------
+Here are the ownership and the certification details
+of the One Line 1.0
+---------------------------------------------------
+
+app_name - 						One Line
+app_alias - 					oneline
+app_author_name - 				My Company
+app_author_organizational - 	My Company
+app_author_organization - 		My Company
+app_author_locality - 			My Company
+app_author_state - 				Maharashtra
+app_author_country - 			India
+app_password - 					ZkPv8d4E8srV
+app_versionName - 				versionName "1.0"
+app_versionCode - 				100
+
+---------------------------------------------------
+The certification was created by WebIntoApp.com at
+the Sunday 4th of January 2026 06:59:50 AM
+
+https://webintoapp.com
+---------------------------------------------------
+

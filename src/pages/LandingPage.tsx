@@ -190,8 +190,9 @@ const Hero = () => (
                         <span className="relative z-10 flex items-center justify-center gap-2">Start Your Line <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" /></span>
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-zinc-200 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
                     </Link>
-                    <a href="#philosophy" className="w-full sm:w-auto px-8 py-4 bg-zinc-900 text-white border border-zinc-800 rounded-full font-medium text-lg hover:bg-zinc-800 transition-all hover:border-zinc-700">
-                        The Philosophy
+                    <a href="/oneline.apk" download className="group w-full sm:w-auto px-8 py-4 bg-zinc-900 text-white border border-zinc-800 rounded-full font-medium text-lg hover:bg-zinc-800 transition-all hover:border-zinc-700 flex items-center justify-center gap-2 hover:scale-105 active:scale-95">
+                        <Smartphone size={20} className="text-zinc-400 group-hover:text-white transition-colors" />
+                        Download Android
                     </a>
                 </div>
             </FadeIn>
@@ -519,9 +520,12 @@ const Footer = () => {
                     <div className="text-left">
                         <h4 className="text-white font-semibold mb-4">Get the App</h4>
                         <div className="flex flex-col gap-3">
-                            <Link to="/auth" className="flex items-center justify-center gap-2 bg-zinc-900 border border-zinc-800 text-white py-2 px-4 rounded-lg hover:bg-zinc-800 transition-colors text-sm w-fit">
+                            <Link to="/auth" className="flex items-center gap-2 text-zinc-500 hover:text-white transition-colors text-sm">
                                 <Smartphone size={16} /> Web App
                             </Link>
+                            <a href="/oneline.apk" download className="flex items-center gap-2 text-zinc-500 hover:text-white transition-colors text-sm">
+                                <Activity size={16} /> Android APK
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -552,9 +556,15 @@ export function LandingPage() {
                 <div className="relative z-10 max-w-2xl mx-auto px-6">
                     <h2 className="text-5xl md:text-7xl font-bold text-white mb-8 tracking-tighter">Start Today.</h2>
                     <p className="text-xl text-zinc-400 mb-10">Your future self will thank you.</p>
-                    <Link to="/auth" className="inline-block px-12 py-5 bg-white text-black rounded-full font-bold text-xl hover:bg-zinc-200 hover:scale-105 transition-all shadow-xl">
-                        Get OneLine Free
-                    </Link>
+                    <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                        <Link to="/auth" className="w-full sm:w-auto px-12 py-5 bg-white text-black rounded-full font-bold text-xl hover:bg-zinc-200 hover:scale-105 transition-all shadow-xl">
+                            Get OneLine Free
+                        </Link>
+                        <a href="/oneline.apk" download className="w-full sm:w-auto px-12 py-5 bg-zinc-900 text-white border border-zinc-800 rounded-full font-bold text-xl hover:bg-zinc-800 transition-all hover:scale-105 shadow-xl flex items-center justify-center gap-3">
+                            <Smartphone size={24} className="text-zinc-400" />
+                            Download App
+                        </a>
+                    </div>
                 </div>
             </section>
 
