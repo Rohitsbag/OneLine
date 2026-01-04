@@ -372,7 +372,7 @@ export function JournalEditor({
     };
 
     // --- Interaction Handlers ---
-    const handleMicDown = (e: React.PointerEvent) => {
+    const handleMicDown = useCallback((e: React.PointerEvent) => {
         e.preventDefault();
         isLongPressRef.current = false;
 
@@ -385,9 +385,9 @@ export function JournalEditor({
             isLongPressRef.current = true;
             startAudioRecording();
         }, 300);
-    };
+    }, [isRecording, startAudioRecording, toggleRecording]);
 
-    const handleMicUp = (e: React.PointerEvent) => {
+    const handleMicUp = useCallback((e: React.PointerEvent) => {
         e.preventDefault();
 
         if (longPressTimerRef.current) {
@@ -403,10 +403,10 @@ export function JournalEditor({
                 toggleRecording();
             }
         }
-    };
+    }, [isRecording, stopAudioRecording, toggleRecording]);
 
     // --- Camera Interaction Handlers (Tap = Image, Hold = OCR) ---
-    const handleCameraDown = (e: React.PointerEvent) => {
+    const handleCameraDown = useCallback((e: React.PointerEvent) => {
         e.preventDefault();
         isCameraLongPressRef.current = false;
 
@@ -415,9 +415,9 @@ export function JournalEditor({
             setIsOCRMode(true);
             ocrFileInputRef.current?.click();
         }, 300);
-    };
+    }, []);
 
-    const handleCameraUp = (e: React.PointerEvent) => {
+    const handleCameraUp = useCallback((e: React.PointerEvent) => {
         e.preventDefault();
 
         if (cameraLongPressTimerRef.current) {
@@ -430,7 +430,7 @@ export function JournalEditor({
             fileInputRef.current?.click();
         }
         isCameraLongPressRef.current = false;
-    };
+    }, [isOCRMode]);
 
     // --- OCR Processing ---
     const handleOCRUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -483,10 +483,10 @@ export function JournalEditor({
         }
     }, [userId]);
 
-    const navigateDate = (direction: 'prev' | 'next') => {
+    const navigateDate = useCallback((direction: 'prev' | 'next') => {
         const newDate = direction === 'prev' ? subDays(currentDate, 1) : addDays(currentDate, 1);
         onDateChange(newDate);
-    };
+    }, [currentDate, onDateChange]);
 
     const isToday = isSameDay(currentDate, new Date());
     const isMinDate = minDate && isSameDay(currentDate, minDate);

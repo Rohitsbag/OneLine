@@ -2,9 +2,12 @@ import { Suspense, lazy } from 'react';
 import { Routes, Route } from 'react-router-dom';
 
 // Lazy load pages for performance optimization
+export const loadAuthPage = () => import('@/pages/AuthPage');
+export const loadJournalPage = () => import('@/pages/JournalPage');
+
 const LandingPage = lazy(() => import('@/pages/LandingPage').then(m => ({ default: m.LandingPage })));
-const AuthPage = lazy(() => import('@/pages/AuthPage').then(m => ({ default: m.AuthPage })));
-const JournalPage = lazy(() => import('@/pages/JournalPage').then(m => ({ default: m.JournalPage })));
+const AuthPage = lazy(() => loadAuthPage().then(m => ({ default: m.AuthPage })));
+const JournalPage = lazy(() => loadJournalPage().then(m => ({ default: m.JournalPage })));
 const PrivacyPolicy = lazy(() => import('@/pages/PrivacyPolicy').then(m => ({ default: m.PrivacyPolicy })));
 const TermsOfService = lazy(() => import('@/pages/TermsOfService').then(m => ({ default: m.TermsOfService })));
 

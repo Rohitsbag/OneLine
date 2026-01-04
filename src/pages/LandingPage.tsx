@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { loadAuthPage, loadJournalPage } from '@/App';
 import { SpotlightCard } from "@/components/SpotlightCard";
 import AnoAI from "@/components/ui/animated-shader-background";
 import {
@@ -132,8 +133,8 @@ const Navbar = () => {
                     </div>
 
                     <div className="hidden md:flex items-center gap-4">
-                        <Link to="/auth" className="text-sm font-medium text-zinc-400 hover:text-white transition-colors">Sign In</Link>
-                        <Link to="/app" className="bg-white text-black px-5 py-2 rounded-full text-sm font-semibold hover:bg-zinc-200 transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.2)] hover:shadow-[0_0_30px_rgba(255,255,255,0.4)]">
+                        <Link to="/auth" onMouseEnter={() => loadAuthPage()} className="text-sm font-medium text-zinc-400 hover:text-white transition-colors">Sign In</Link>
+                        <Link to="/app" onMouseEnter={() => { loadAuthPage(); loadJournalPage(); }} className="bg-white text-black px-5 py-2 rounded-full text-sm font-semibold hover:bg-zinc-200 transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.2)] hover:shadow-[0_0_30px_rgba(255,255,255,0.4)]">
                             Start Writing
                         </Link>
                     </div>
@@ -190,7 +191,7 @@ const Hero = () => (
 
             <FadeIn delay={400}>
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-24">
-                    <Link to="/auth" className="group relative w-full sm:w-auto px-8 py-4 bg-white text-black rounded-full font-bold text-lg overflow-hidden transition-all hover:scale-105 hover:shadow-[0_0_40px_rgba(255,255,255,0.3)]">
+                    <Link to="/auth" onMouseEnter={() => loadAuthPage()} className="group relative w-full sm:w-auto px-8 py-4 bg-white text-black rounded-full font-bold text-lg overflow-hidden transition-all hover:scale-105 hover:shadow-[0_0_40px_rgba(255,255,255,0.3)]">
                         <span className="relative z-10 flex items-center justify-center gap-2">Start Your Line <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" /></span>
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-zinc-200 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
                     </Link>
