@@ -11,7 +11,7 @@ const AnoAI = () => {
     const scene = new THREE.Scene();
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(renderer.domElement);
 
@@ -67,9 +67,10 @@ const AnoAI = () => {
 
           float f = 2.0 + fbm(p + vec2(iTime * 5.0, 0.0)) * 0.5;
 
-          for (float i = 0.0; i < 28.0; i++) {
+          for (float i = 0.0; i < 16.0; i++) {
             v = p + cos(i * i + (iTime + p.x * 0.08) * 0.025 + i * vec2(13.0, 11.0)) * 3.5 + vec2(sin(iTime * 3.0 + i) * 0.003, cos(iTime * 3.5 - i) * 0.003);
-            float tailNoise = fbm(v + vec2(iTime * 0.5, i)) * 0.3 * (1.0 - (i / 28.0));
+            float thinness = i / 16.0;
+            float tailNoise = fbm(v + vec2(iTime * 0.5, i)) * 0.3 * (1.0 - thinness);
             vec4 auroraColors = vec4(
               0.1 + 0.3 * sin(i * 0.2 + iTime * 0.4),
               0.3 + 0.5 * cos(i * 0.3 + iTime * 0.5),
@@ -77,11 +78,11 @@ const AnoAI = () => {
               1.0
             );
             vec4 currentContribution = auroraColors * exp(sin(i * i + iTime * 0.8)) / length(max(v, vec2(v.x * f * 0.015, v.y * 1.5)));
-            float thinnessFactor = smoothstep(0.0, 1.0, i / 28.0) * 0.6;
+            float thinnessFactor = thinness * 0.6;
             o += currentContribution * (1.0 + tailNoise * 0.8) * thinnessFactor;
           }
 
-          o = tanh(pow(o / 100.0, vec4(1.6)));
+          o = 1.0 - exp(-o * 0.02);
           gl_FragColor = o * 1.5;
         }
       `
@@ -103,7 +104,7 @@ const AnoAI = () => {
       const width = window.innerWidth;
       const height = window.innerHeight;
       renderer.setSize(width, height);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
       material.uniforms.iResolution.value.set(width, height);
     };
     window.addEventListener('resize', handleResize);

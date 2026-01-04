@@ -19,6 +19,7 @@ import {
     Search,
     Activity
 } from 'lucide-react';
+import { cn } from "@/lib/utils";
 
 /* --- HOOKS & UTILS --- */
 
@@ -34,7 +35,7 @@ const FadeIn = ({ children, delay = 0, className = "" }: { children: ReactNode, 
                 setIsVisible(true);
                 observer.unobserve(entry.target);
             }
-        }, { threshold: 0.1, rootMargin: '50px' });
+        }, { threshold: 0.1, rootMargin: '100px' });
 
         if (domRef.current) observer.observe(domRef.current);
         return () => observer.disconnect();
@@ -105,7 +106,7 @@ const Navbar = () => {
 
     useEffect(() => {
         const handleScroll = () => setScrolled(window.scrollY > 20);
-        window.addEventListener('scroll', handleScroll);
+        window.addEventListener('scroll', handleScroll, { passive: true });
         return () => window.removeEventListener('scroll', handleScroll);
     }, []);
 
@@ -160,93 +161,104 @@ const Navbar = () => {
     );
 };
 
-const Hero = () => (
-    <section className="relative min-h-screen flex flex-col items-center justify-center pt-32 pb-20 overflow-hidden bg-zinc-950">
-        <AnoAI />
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[500px] bg-indigo-500/10 rounded-full blur-[120px] pointer-events-none animate-pulse-slow" />
+const Hero = () => {
+    const [bgReady, setBgReady] = useState(false);
 
-        <div className="relative z-10 max-w-5xl mx-auto px-6 text-center">
-            <FadeIn delay={100}>
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-xs font-medium text-zinc-400 mb-8 mx-auto hover:bg-zinc-800 transition-colors cursor-default">
-                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                    Version 1.0 is now live
-                </div>
-            </FadeIn>
+    useEffect(() => {
+        const timer = setTimeout(() => setBgReady(true), 1000);
+        return () => clearTimeout(timer);
+    }, []);
 
-            <FadeIn delay={200}>
-                <h1 className="text-5xl md:text-7xl lg:text-9xl font-bold tracking-tighter text-white mb-6 leading-[0.9]">
-                    Clarity, <br />
-                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-zinc-200 via-zinc-400 to-zinc-600">
-                        one line at a time.
-                    </span>
-                </h1>
-            </FadeIn>
+    return (
+        <section className="relative min-h-screen flex flex-col items-center justify-center pt-32 pb-20 overflow-hidden bg-zinc-950">
+            <div className={cn("absolute inset-0 transition-opacity duration-1000", bgReady ? "opacity-40" : "opacity-0")}>
+                {bgReady && <AnoAI />}
+            </div>
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[500px] bg-indigo-500/10 rounded-full blur-[120px] pointer-events-none animate-pulse-slow" />
 
-            <FadeIn delay={300}>
-                <p className="max-w-xl mx-auto text-lg md:text-xl text-zinc-400 mb-10 leading-relaxed">
-                    The minimalist journal that turns writing into a habit.
-                    Capture your life in 30 seconds a day.
-                </p>
-            </FadeIn>
+            <div className="relative z-10 max-w-5xl mx-auto px-6 text-center">
+                <FadeIn delay={100}>
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-xs font-medium text-zinc-400 mb-8 mx-auto hover:bg-zinc-800 transition-colors cursor-default">
+                        <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                        Version 1.0 is now live
+                    </div>
+                </FadeIn>
 
-            <FadeIn delay={400}>
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-24">
-                    <Link to="/auth" onMouseEnter={() => loadAuthPage()} className="group relative w-full sm:w-auto px-8 py-4 bg-white text-black rounded-full font-bold text-lg overflow-hidden transition-all hover:scale-105 hover:shadow-[0_0_40px_rgba(255,255,255,0.3)]">
-                        <span className="relative z-10 flex items-center justify-center gap-2">Start Your Line <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" /></span>
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-zinc-200 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
-                    </Link>
-                    <a href="/oneline.apk" download className="group w-full sm:w-auto px-8 py-4 bg-zinc-900 text-white border border-zinc-800 rounded-full font-medium text-lg hover:bg-zinc-800 transition-all hover:border-zinc-700 flex items-center justify-center gap-2 hover:scale-105 active:scale-95">
-                        <Smartphone size={20} className="text-zinc-400 group-hover:text-white transition-colors" />
-                        Download Android
-                    </a>
-                </div>
-            </FadeIn>
+                <FadeIn delay={200}>
+                    <h1 className="text-5xl md:text-7xl lg:text-9xl font-bold tracking-tighter text-white mb-6 leading-[0.9]">
+                        Clarity, <br />
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-zinc-200 via-zinc-400 to-zinc-600">
+                            one line at a time.
+                        </span>
+                    </h1>
+                </FadeIn>
 
-            {/* Hero Phone Mockup */}
-            <FadeIn delay={600} className="relative mx-auto w-full max-w-[320px]">
-                <div className="relative border-zinc-800 bg-zinc-950 border-[8px] rounded-[3rem] h-[640px] shadow-2xl overflow-hidden hover:scale-[1.02] transition-transform duration-700">
-                    <div className="h-[32px] w-[3px] bg-zinc-800 absolute -left-[11px] top-[72px] rounded-l-lg" />
-                    <div className="h-[46px] w-[3px] bg-zinc-800 absolute -left-[11px] top-[124px] rounded-l-lg" />
-                    <div className="absolute top-0 w-full h-32 bg-gradient-to-b from-zinc-900 via-zinc-900/50 to-transparent z-20 pointer-events-none" />
+                <FadeIn delay={300}>
+                    <p className="max-w-xl mx-auto text-lg md:text-xl text-zinc-400 mb-10 leading-relaxed">
+                        The minimalist journal that turns writing into a habit.
+                        Capture your life in 30 seconds a day.
+                    </p>
+                </FadeIn>
 
-                    <div className="p-8 h-full flex flex-col text-left">
-                        <div className="mt-12 mb-8 flex items-center justify-center">
-                            <span className="text-xs font-medium tracking-widest text-zinc-500 uppercase">Today</span>
-                        </div>
+                <FadeIn delay={400}>
+                    <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-24">
+                        <Link to="/auth" onMouseEnter={() => loadAuthPage()} className="group relative w-full sm:w-auto px-8 py-4 bg-white text-black rounded-full font-bold text-lg overflow-hidden transition-all hover:scale-105 hover:shadow-[0_0_40px_rgba(255,255,255,0.3)]">
+                            <span className="relative z-10 flex items-center justify-center gap-2">Start Your Line <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" /></span>
+                            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-zinc-200 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
+                        </Link>
+                        <a href="/oneline.apk" download className="group w-full sm:w-auto px-8 py-4 bg-zinc-900 text-white border border-zinc-800 rounded-full font-medium text-lg hover:bg-zinc-800 transition-all hover:border-zinc-700 flex items-center justify-center gap-2 hover:scale-105 active:scale-95">
+                            <Smartphone size={20} className="text-zinc-400 group-hover:text-white transition-colors" />
+                            Download Android
+                        </a>
+                    </div>
+                </FadeIn>
 
-                        <div className="space-y-6 flex-1">
-                            <div className="space-y-2 opacity-50 blur-[1px]">
-                                <div className="flex items-center gap-4">
-                                    <span className="text-zinc-600 text-[10px] font-mono">20 OCT</span>
-                                    <div className="h-px bg-zinc-800 flex-1"></div>
-                                </div>
-                                <p className="text-zinc-400 text-sm font-light">Long run in the rain. Felt alive.</p>
+                {/* Hero Phone Mockup */}
+                <FadeIn delay={600} className="relative mx-auto w-full max-w-[320px]">
+                    <div className="relative border-zinc-800 bg-zinc-950 border-[8px] rounded-[3rem] h-[640px] shadow-2xl overflow-hidden hover:scale-[1.02] transition-transform duration-700">
+                        <div className="h-[32px] w-[3px] bg-zinc-800 absolute -left-[11px] top-[72px] rounded-l-lg" />
+                        <div className="h-[46px] w-[3px] bg-zinc-800 absolute -left-[11px] top-[124px] rounded-l-lg" />
+                        <div className="absolute top-0 w-full h-32 bg-gradient-to-b from-zinc-900 via-zinc-900/50 to-transparent z-20 pointer-events-none" />
+
+                        <div className="p-8 h-full flex flex-col text-left">
+                            <div className="mt-12 mb-8 flex items-center justify-center">
+                                <span className="text-xs font-medium tracking-widest text-zinc-500 uppercase">Today</span>
                             </div>
 
-                            <div className="space-y-2">
-                                <div className="flex items-center gap-4">
-                                    <span className="text-white text-[10px] font-mono font-bold">TODAY</span>
-                                    <div className="h-px bg-indigo-500 flex-1 shadow-[0_0_10px_rgba(99,102,241,0.5)]"></div>
+                            <div className="space-y-6 flex-1">
+                                <div className="space-y-2 opacity-50 blur-[1px]">
+                                    <div className="flex items-center gap-4">
+                                        <span className="text-zinc-600 text-[10px] font-mono">20 OCT</span>
+                                        <div className="h-px bg-zinc-800 flex-1"></div>
+                                    </div>
+                                    <p className="text-zinc-400 text-sm font-light">Long run in the rain. Felt alive.</p>
                                 </div>
-                                <p className="text-white text-lg font-light leading-relaxed">
-                                    <TypingEffect />
-                                </p>
-                            </div>
-                        </div>
 
-                        <div className="mt-auto flex justify-between px-2 text-zinc-600">
-                            <Mic size={24} className="hover:text-white transition-colors cursor-pointer hover:scale-110 duration-300" />
-                            <Camera size={24} className="hover:text-white transition-colors cursor-pointer hover:scale-110 duration-300" />
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-4">
+                                        <span className="text-white text-[10px] font-mono font-bold">TODAY</span>
+                                        <div className="h-px bg-indigo-500 flex-1 shadow-[0_0_10px_rgba(99,102,241,0.5)]"></div>
+                                    </div>
+                                    <p className="text-white text-lg font-light leading-relaxed">
+                                        <TypingEffect />
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="mt-auto flex justify-between px-2 text-zinc-600">
+                                <Mic size={24} className="hover:text-white transition-colors cursor-pointer hover:scale-110 duration-300" />
+                                <Camera size={24} className="hover:text-white transition-colors cursor-pointer hover:scale-110 duration-300" />
+                            </div>
                         </div>
                     </div>
-                </div>
-            </FadeIn>
-        </div>
-    </section>
-);
+                </FadeIn>
+            </div>
+        </section>
+    );
+};
 
 const ParadoxSection = () => (
-    <section id="philosophy" className="py-32 bg-zinc-950 relative border-t border-white/5 overflow-hidden">
+    <section id="philosophy" className="py-32 bg-zinc-950 relative border-t border-white/5 overflow-hidden [content-visibility:auto]">
         <div className="max-w-6xl mx-auto px-6">
             <div className="grid lg:grid-cols-2 gap-20 items-center">
                 <FadeIn>
@@ -309,7 +321,7 @@ const ParadoxSection = () => (
 );
 
 const Features = () => (
-    <section id="features" className="py-32 bg-zinc-950 px-6">
+    <section id="features" className="py-32 bg-zinc-950 px-6 [content-visibility:auto]">
         <div className="max-w-7xl mx-auto">
             <FadeIn className="text-center mb-24">
                 <h2 className="text-5xl font-bold text-white mb-6">Atomic Journaling</h2>
@@ -445,7 +457,7 @@ const AntiFeatures = () => (
 );
 
 const Roadmap = () => (
-    <section id="roadmap" className="py-24 bg-zinc-900 border-y border-zinc-800 relative overflow-hidden">
+    <section id="roadmap" className="py-24 bg-zinc-900 border-y border-zinc-800 relative overflow-hidden [content-visibility:auto]">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-900/10 via-zinc-900 to-zinc-900 pointer-events-none"></div>
         <div className="max-w-7xl mx-auto px-6 relative z-10 text-center">
             <FadeIn>
