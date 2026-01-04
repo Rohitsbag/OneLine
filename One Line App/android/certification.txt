@@ -1,6 +1,6 @@
 ---------------------------------------------------
 Here are the ownership and the certification details
-of the One Line 1.2
+of the One Line 1.3
 ---------------------------------------------------
 
 app_name - 						One Line
@@ -12,12 +12,12 @@ app_author_locality - 			My Company
 app_author_state - 				Maharashtra
 app_author_country - 			India
 app_password - 					ZkPv8d4E8srV
-app_versionName - 				versionName "1.2"
-app_versionCode - 				102
+app_versionName - 				versionName "1.3"
+app_versionCode - 				103
 
 ---------------------------------------------------
 The certification was created by WebIntoApp.com at
-the Sunday 4th of January 2026 11:05:44 AM
+the Sunday 4th of January 2026 11:37:29 AM
 
 https://webintoapp.com
 ---------------------------------------------------

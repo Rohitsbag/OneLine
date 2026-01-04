@@ -1,7 +1,7 @@
 
 FREE APP
 
-Created by WebIntoApp.com on Sunday 4th of January 2026 11:05:45 AM.
+Created by WebIntoApp.com on Sunday 4th of January 2026 11:37:30 AM.
 
 Release APK & App Bundle (AAB) ready to be submitted to Google Play Store 
 and to any other APK / AAB store over the internet.
@@ -10,7 +10,7 @@ and to any other APK / AAB store over the internet.
 App ID:			1061277
 App Key:		HBpUNkiYwBXjWNXeEbMxTzRsrRpFSxKo
 App Name:		One Line
-App Version:	1.2
+App Version:	1.3
 Package:		com.resolvia.oneline
 Mode:			Free App
 -------------------------------------
