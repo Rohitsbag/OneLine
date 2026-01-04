@@ -579,17 +579,16 @@ export function JournalEditor({
 
             const recognition = new SpeechRecognition();
             recognition.continuous = true;
-            recognition.interimResults = true;
+            recognition.interimResults = false; // FIXED: Only get final results to avoid duplication
             recognition.lang = 'en-US';
 
             recognition.onstart = () => {
                 setIsRecording(true);
-                // BUG FIX: Reset last appended tracker on new session
+                // Track accumulated text from this session
                 lastAppendedTextRef.current = "";
             };
             recognition.onend = () => {
                 setIsRecording(false);
-                // Clear the ref when recognition ends naturally
                 recognitionRef.current = null;
             };
             recognition.onerror = (e: any) => {
@@ -604,32 +603,27 @@ export function JournalEditor({
             };
 
             recognition.onresult = (event: any) => {
-                let finalTranscript = '';
-                for (let i = event.resultIndex; i < event.results.length; ++i) {
-                    if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i][0].transcript;
-                    }
-                }
-                if (finalTranscript) {
-                    const trimmedFinal = finalTranscript.trim();
-                    // BUG FIX: More robust deduplication using ref
-                    // Skip if this exact text was already appended
-                    if (trimmedFinal === lastAppendedTextRef.current) {
+                // With interimResults=false, each result is a complete, finalized phrase
+                const latestResult = event.results[event.results.length - 1];
+                if (latestResult.isFinal) {
+                    const newText = latestResult[0].transcript.trim();
+
+                    if (!newText) return;
+
+                    // Simple duplicate check: don't add if exact same as last
+                    if (newText === lastAppendedTextRef.current) {
                         return;
                     }
-                    // Skip if new text is a substring of what we just added (contextual correction)
-                    if (lastAppendedTextRef.current.includes(trimmedFinal)) {
-                        return;
-                    }
-                    lastAppendedTextRef.current = trimmedFinal;
+
+                    lastAppendedTextRef.current = newText;
 
                     setContent(prev => {
-                        // Additional check: don't append if content already ends with this
-                        if (prev.trim().endsWith(trimmedFinal)) {
+                        // Don't append if content already ends with this text
+                        if (prev.trim().endsWith(newText)) {
                             return prev;
                         }
                         const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                        return prev + (needsSpace ? ' ' : '') + finalTranscript;
+                        return prev + (needsSpace ? ' ' : '') + newText;
                     });
                 }
             };
