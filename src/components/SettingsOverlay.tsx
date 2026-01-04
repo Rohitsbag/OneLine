@@ -1,4 +1,4 @@
-import { X, FileDown, LogOut, User as UserIcon, Info } from "lucide-react";
+import { X, FileDown, LogOut, User as UserIcon, Info, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { supabase } from "@/utils/supabase/client";
@@ -59,7 +59,6 @@ export function SettingsOverlay({ isOpen, onClose, aiEnabled, onToggleAi, accent
     };
 
     const accentObj = ACCENT_COLORS.find(c => c.bgClass === accentColor) || ACCENT_COLORS[0];
-    const hoverBgClass = accentObj.hoverBgClass || "hover:bg-zinc-200";
 
     if (!isOpen) return null;
 
@@ -122,64 +121,96 @@ export function SettingsOverlay({ isOpen, onClose, aiEnabled, onToggleAi, accent
 
                         {/* AI Features */}
                         <section>
-                            <div className="flex items-center gap-2 mb-6">
-                                <h3 className="text-sm font-medium text-zinc-500 uppercase tracking-wider">AI Features</h3>
+                            <div className="flex items-center gap-2 mb-4">
+                                <h3 className="text-sm font-medium text-zinc-500 uppercase tracking-widest text-[10px]">AI Capabilities</h3>
                                 <div className="group relative">
                                     <div className="p-1 rounded-full cursor-help hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors">
-                                        <Info className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-600 hover:text-zinc-600 dark:hover:text-zinc-400" />
+                                        <Info className="w-3 h-3 text-zinc-400 dark:text-zinc-600" />
                                     </div>
-                                    {/* Tooltip */}
-                                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 p-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 text-xs rounded-xl shadow-xl opacity-0 translate-y-2 group-hover:translate-y-0 group-hover:opacity-100 transition-all pointer-events-none z-50 text-center leading-relaxed">
+                                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 p-4 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 text-xs rounded-2xl shadow-2xl opacity-0 translate-y-2 group-hover:translate-y-0 group-hover:opacity-100 transition-all pointer-events-none z-50 text-center leading-relaxed">
                                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 -mb-px w-2 h-2 bg-white dark:bg-zinc-900 border-l border-t border-zinc-200 dark:border-zinc-800 rotate-45 transform"></div>
-                                        <span className="font-medium text-zinc-900 dark:text-zinc-200 block mb-1">Privacy First</span>
-                                        AI features are strictly opt-in. Your data is never used for model training.
+                                        <span className="font-semibold text-zinc-900 dark:text-zinc-100 block mb-1">Encrypted & Private</span>
+                                        Your line is only yours. AI features are opt-in and processed locally or via secure inference.
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="bg-zinc-50 dark:bg-zinc-900/30 rounded-2xl border border-zinc-200 dark:border-zinc-800/50 overflow-hidden">
-                                <div className="p-6 flex items-center justify-between">
-                                    <div>
-                                        <div className="text-zinc-900 dark:text-zinc-200 font-medium mb-1">AI Reflections</div>
-                                        <div className="text-zinc-500 text-sm">Enable weekly summaries and gentle memory prompts</div>
+                            <div className="group relative overflow-hidden rounded-[2.5rem] bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-200 dark:border-zinc-800/50 p-1.5 transition-all hover:bg-zinc-100 dark:hover:bg-zinc-900/60 hover:border-zinc-300 dark:hover:border-zinc-700">
+                                <button
+                                    onClick={() => onToggleAi(!aiEnabled)}
+                                    className="w-full flex items-center gap-5 p-4 rounded-[2.1rem] transition-all focus:outline-none"
+                                >
+                                    <div className={cn(
+                                        "w-14 h-14 rounded-[1.4rem] flex items-center justify-center transition-all duration-500 relative overflow-hidden",
+                                        aiEnabled ? cn(accentColor, "bg-opacity-20 shadow-[0_0_20px_rgba(0,0,0,0.1)]") : "bg-zinc-200 dark:bg-zinc-800"
+                                    )}>
+                                        {aiEnabled && (
+                                            <div className={cn("absolute inset-0 opacity-20 blur-xl animate-pulse-slow", accentColor)} />
+                                        )}
+                                        <Sparkles className={cn("w-7 h-7 relative z-10 transition-colors duration-500", aiEnabled ? accentObj.class : "text-zinc-400")} />
                                     </div>
-                                    <button
-                                        onClick={() => onToggleAi(!aiEnabled)}
-                                        className={cn("w-12 h-6 rounded-full relative transition-colors duration-200", aiEnabled ? accentColor : "bg-zinc-200 dark:bg-zinc-800")}
+
+                                    <div className="text-left flex-1 min-w-0">
+                                        <div className="text-zinc-900 dark:text-zinc-100 font-bold text-lg mb-1 tracking-tight">AI Reflections</div>
+                                        <div className="text-zinc-500 dark:text-zinc-400 text-xs font-medium uppercase tracking-widest opacity-80">Weekly Insights</div>
+                                    </div>
+
+                                    <div
+                                        className={cn(
+                                            "w-12 h-7 rounded-full relative transition-all duration-500 p-1 ring-1 ring-inset shadow-inner",
+                                            aiEnabled
+                                                ? cn(accentColor, "ring-black/5 dark:ring-white/5")
+                                                : "bg-zinc-200 dark:bg-zinc-800 ring-zinc-300 dark:ring-zinc-700"
+                                        )}
                                     >
-                                        <div className={cn("w-4 h-4 rounded-full absolute top-1 transition-all duration-200 shadow-sm", aiEnabled ? "bg-white left-7" : "bg-white dark:bg-zinc-500 left-1")}></div>
-                                    </button>
-                                </div>
+                                        <div className={cn(
+                                            "w-5 h-5 rounded-full bg-white shadow-[0_2px_4px_rgba(0,0,0,0.2)] transition-all duration-500 transform",
+                                            aiEnabled ? "translate-x-5" : "translate-x-0"
+                                        )}></div>
+                                    </div>
+                                </button>
                             </div>
                         </section>
 
                         {/* Data */}
                         <section>
-                            <h3 className="text-sm font-medium text-zinc-500 mb-6 uppercase tracking-wider">Your Data</h3>
-                            <div className="bg-zinc-50 dark:bg-zinc-900/30 rounded-2xl border border-zinc-200 dark:border-zinc-800/50 p-6">
+                            <h3 className="text-sm font-medium text-zinc-500 mb-4 uppercase tracking-widest text-[10px]">Your Data</h3>
+                            <div className="bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-200 dark:border-zinc-800/50 rounded-[2.5rem] p-8 flex flex-col items-center text-center gap-6 group hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+                                <div className={cn(
+                                    "w-20 h-20 rounded-3xl flex items-center justify-center relative transition-all duration-700",
+                                    "bg-white dark:bg-zinc-800 shadow-xl shadow-black/5"
+                                )}>
+                                    <div className={cn("absolute inset-0 opacity-10 blur-2xl transition-all duration-1000 group-hover:opacity-30", accentColor)} />
+                                    <FileDown className={cn("w-10 h-10 relative z-10", accentObj.class)} />
+                                </div>
+
+                                <div className="space-y-1">
+                                    <h4 className="text-zinc-900 dark:text-zinc-100 font-bold text-xl tracking-tight">Export Journal</h4>
+                                    <p className="text-zinc-500 dark:text-zinc-500 text-sm max-w-[260px] leading-relaxed font-medium">
+                                        Your line is only yours. Download your entire history as a secure JSON file anytime.
+                                    </p>
+                                </div>
+
                                 <button
                                     onClick={handleExport}
                                     className={cn(
-                                        "w-full text-white font-medium h-12 rounded-xl transition-colors flex items-center justify-center gap-2",
-                                        accentColor,
-                                        hoverBgClass
+                                        "w-full h-14 rounded-2xl flex items-center justify-center gap-2 font-bold text-white shadow-2xl transition-all active:scale-95",
+                                        accentObj.bgClass,
+                                        accentObj.hoverBgClass
                                     )}
+                                    title="Export All Journal Data"
                                 >
-                                    <FileDown className="w-4 h-4" />
-                                    Export All Data
+                                    <span className="relative z-10">Download History</span>
                                 </button>
-                                <div className="mt-4 text-center text-zinc-500 dark:text-zinc-600 text-xs">
-                                    Download all your journal entries as a JSON file.
-                                </div>
                             </div>
                         </section>
 
                         {/* Account Actions */}
                         <section>
-                            <div className="bg-zinc-50 dark:bg-zinc-900/30 rounded-2xl border border-zinc-200 dark:border-zinc-800/50 p-6">
+                            <div className="bg-zinc-50 dark:bg-zinc-900/30 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-2">
                                 <button
                                     onClick={handleSignOut}
-                                    className="w-full bg-white dark:bg-zinc-900 text-red-500 dark:text-red-400 font-medium h-12 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors flex items-center justify-center gap-2 border border-zinc-200 dark:border-zinc-800"
+                                    className="w-full h-12 rounded-[1.5rem] bg-white dark:bg-zinc-900 text-red-500 dark:text-red-400 font-bold hover:bg-red-50 dark:hover:bg-red-500/10 transition-all flex items-center justify-center gap-2 border border-zinc-200 dark:border-red-500/20 shadow-sm"
                                 >
                                     <LogOut className="w-4 h-4" />
                                     Sign Out

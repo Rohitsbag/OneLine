@@ -3,6 +3,7 @@ import { useState } from "react";
 import { supabase } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
 import { generateWeeklyReflection } from "@/utils/ai";
+import { ACCENT_COLORS } from "@/constants/colors";
 
 interface WeeklyReflectionProps {
     accentColor?: string;
@@ -12,11 +13,9 @@ export function WeeklyReflection({ accentColor = "bg-indigo-500" }: WeeklyReflec
     const [reflection, setReflection] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
 
-    // Derive text color from bg accent (bg-indigo-500 -> text-indigo-400/500)
-    // Simple heuristic: replace bg- with text-
-    const textAccent = accentColor.replace('bg-', 'text-');
-    // For gradient, we might stick to a solid color for simplicity and consistency,
-    // or map the colors. For now, solid accent text is cleaner than trying to guess a gradient.
+    const accentObj = ACCENT_COLORS.find(c => c.bgClass === accentColor) || ACCENT_COLORS[0];
+    const textAccent = accentObj.class;
+    const hoverBgClass = accentObj.hoverBgClass;
 
     const generate = async () => {
         setIsLoading(true);
@@ -44,8 +43,8 @@ export function WeeklyReflection({ accentColor = "bg-indigo-500" }: WeeklyReflec
             <div className="flex items-center justify-between mb-8 text-zinc-500 dark:text-zinc-400">
                 <div className="flex items-center gap-2 text-sm font-medium">
                     <Sparkles className={cn("w-4 h-4", textAccent)} />
-                    <span className={cn("bg-clip-text text-transparent bg-gradient-to-r", `from-${accentColor.split('-')[1]}-500`, `to-${accentColor.split('-')[1]}-600`)}>
-                        Weekly Reflection
+                    <span className="text-zinc-900 dark:text-zinc-100 uppercase tracking-widest text-xs">
+                        Reflection
                     </span>
                 </div>
                 <button
@@ -64,13 +63,25 @@ export function WeeklyReflection({ accentColor = "bg-indigo-500" }: WeeklyReflec
                     </p>
                 ) : (
                     <>
-                        <p className="text-zinc-500 text-sm">No reflection yet this week</p>
+                        <div className="w-12 h-12 rounded-full bg-zinc-100 dark:bg-zinc-800/50 flex items-center justify-center mb-2">
+                            <Sparkles className={cn("w-6 h-6 opacity-20", textAccent)} />
+                        </div>
+                        <p className="text-zinc-500 text-sm max-w-[200px]">No weekly summary generated yet.</p>
                         <button
                             onClick={generate}
                             disabled={isLoading}
-                            className="text-zinc-800 dark:text-zinc-200 text-sm font-medium hover:text-black dark:hover:text-white hover:underline decoration-zinc-300 dark:decoration-zinc-700 underline-offset-4 transition-all disabled:opacity-50"
+                            className={cn(
+                                "mt-2 px-6 py-2.5 rounded-full text-sm font-semibold text-white transition-all shadow-lg shadow-black/5 active:scale-95 disabled:opacity-50",
+                                accentColor,
+                                hoverBgClass
+                            )}
                         >
-                            {isLoading ? "Generating..." : "Generate Reflection"}
+                            {isLoading ? (
+                                <div className="flex items-center gap-2">
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    <span>Generating...</span>
+                                </div>
+                            ) : "Generate Insight"}
                         </button>
                     </>
                 )}

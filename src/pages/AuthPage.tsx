@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { supabase } from '@/utils/supabase/client';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Loader2, Sparkles } from 'lucide-react';
+import { ArrowLeft, Loader2, Sparkles, Eye, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 export function AuthPage() {
@@ -10,6 +10,7 @@ export function AuthPage() {
     const [password, setPassword] = useState('');
     const [mode, setMode] = useState<'signin' | 'signup'>('signin');
     const [error, setError] = useState<string | null>(null);
+    const [showPassword, setShowPassword] = useState(false);
     const navigate = useNavigate();
 
     const handleAuth = async (e: React.FormEvent) => {
@@ -74,16 +75,23 @@ export function AuthPage() {
                                 autoComplete="email"
                             />
                         </div>
-                        <div>
+                        <div className="relative">
                             <input
-                                type="password"
+                                type={showPassword ? "text" : "password"}
                                 placeholder="Password"
                                 value={password}
                                 onChange={e => setPassword(e.target.value)}
-                                className="w-full bg-black/50 border border-zinc-800 py-3 px-4 rounded-xl text-white placeholder:text-zinc-600 focus:outline-none focus:border-white/20 transition-colors"
+                                className="w-full bg-black/50 border border-zinc-800 py-3 px-4 rounded-xl text-white placeholder:text-zinc-600 focus:outline-none focus:border-white/20 transition-colors pr-12"
                                 required
                                 autoComplete="current-password"
                             />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)}
+                                className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 transition-colors"
+                            >
+                                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                            </button>
                         </div>
 
                         {error && (
