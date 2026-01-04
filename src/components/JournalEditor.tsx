@@ -635,9 +635,10 @@ export function JournalEditor({
             let tier = detectNetworkTier();
 
             // SECURITY: Force offline if no active session (prevents 401 Unauthorized loops)
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) {
-                console.log("No active session. Forcing Offline STT.");
+            // getUser() validates the token on the server/locally more strictly than getSession()
+            const { data: { user }, error: authError } = await supabase.auth.getUser();
+            if (authError || !user) {
+                console.log("No valid user session. Forcing Offline STT.");
                 tier = "offline";
             }
 
@@ -1026,7 +1027,10 @@ export function JournalEditor({
                                 </span>
                             </div>
                         ) : isRecording ? (
-                            <Square className="w-5 h-5 text-zinc-900 dark:text-zinc-100" />
+                            <div className="flex items-center gap-2">
+                                <Square className="w-5 h-5 text-zinc-900 dark:text-zinc-100 fill-current" />
+                                <span className="text-zinc-900 dark:text-zinc-100 text-xs font-bold uppercase tracking-wider">Stop</span>
+                            </div>
                         ) : (
                             <Mic className={cn("w-6 h-6 text-zinc-600 transition-colors", hoverClass)} />
                         )}
