@@ -634,11 +634,11 @@ export function JournalEditor({
             const { detectNetworkTier, getSTTModel } = await import("@/utils/stt-tiered");
             let tier = detectNetworkTier();
 
-            // SECURITY: Force offline if no active session (prevents 401 Unauthorized loops)
-            // getUser() validates the token on the server/locally more strictly than getSession()
-            const { data: { user }, error: authError } = await supabase.auth.getUser();
-            if (authError || !user) {
-                console.log("No valid user session. Forcing Offline STT.");
+            // SECURITY: Force offline if no active session token (prevents 401 errors)
+            // We check access_token specifically because that's what ai.ts needs
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session?.access_token) {
+                console.log("No valid access token. Forcing Offline STT.");
                 tier = "offline";
             }
 
@@ -731,9 +731,14 @@ export function JournalEditor({
                                     return prev + (needsSpace ? ' ' : '') + text;
                                 });
                             }
-                        } catch (err) {
+                        } catch (err: any) {
                             console.error("Transcription failed:", err);
-                            alert("Transcription failed. Please try again.");
+                            // Specific feedback for Auth/Network issues
+                            if (err.message?.includes("401") || err.message?.includes("Unauthorized")) {
+                                alert("Session expired. Please sign in again for high-quality transcription, or use offline mode.");
+                            } else {
+                                alert("Transcription failed. Please try again.");
+                            }
                         } finally {
                             if (isMountedRef.current) setIsTranscribing(false);
                         }
