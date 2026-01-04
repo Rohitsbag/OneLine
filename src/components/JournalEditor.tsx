@@ -45,15 +45,16 @@ export function JournalEditor({
     const [isRecordingAudio, setIsRecordingAudio] = useState(false);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
-    const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
-    const isLongPressRef = useRef(false);
+
+    // Media Menu State
+    const [showMicMenu, setShowMicMenu] = useState(false);
+    const [showCameraMenu, setShowCameraMenu] = useState(false);
+    const micMenuRef = useRef<HTMLDivElement>(null);
+    const cameraMenuRef = useRef<HTMLDivElement>(null);
 
     // OCR State
-    const [isOCRMode, setIsOCRMode] = useState(false);
     const [isProcessingOCR, setIsProcessingOCR] = useState(false);
     const ocrFileInputRef = useRef<HTMLInputElement>(null);
-    const cameraLongPressTimerRef = useRef<NodeJS.Timeout | null>(null);
-    const isCameraLongPressRef = useRef(false);
 
     const currentDate = date;
 
@@ -68,17 +69,27 @@ export function JournalEditor({
         checkUser();
     }, []);
 
-    // Cleanup: Stop any active recordings on unmount
+    // Cleanup: Stop any active recordings and close menus on unmount
     useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (micMenuRef.current && !micMenuRef.current.contains(event.target as Node)) {
+                setShowMicMenu(false);
+            }
+            if (cameraMenuRef.current && !cameraMenuRef.current.contains(event.target as Node)) {
+                setShowCameraMenu(false);
+            }
+        };
+
+        document.addEventListener("mousedown", handleClickOutside);
+
         return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
             // Stop SpeechRecognition if active
             if (recognitionRef.current) {
                 try {
                     recognitionRef.current.stop();
                     recognitionRef.current = null;
-                } catch (e) {
-                    // Ignore errors on cleanup
-                }
+                } catch (e) { }
             }
             // Stop MediaRecorder if active
             if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
@@ -371,73 +382,41 @@ export function JournalEditor({
         }
     };
 
-    // --- Interaction Handlers ---
-    const handleMicDown = useCallback((e: React.PointerEvent) => {
-        e.preventDefault();
-        isLongPressRef.current = false;
-
-        if (isRecording) {
-            toggleRecording();
-            return;
+    const triggerHaptic = useCallback((pattern: number | number[] = 10) => {
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+            navigator.vibrate(pattern);
         }
-
-        longPressTimerRef.current = setTimeout(() => {
-            isLongPressRef.current = true;
-            startAudioRecording();
-        }, 300);
-    }, [isRecording, startAudioRecording, toggleRecording]);
-
-    const handleMicUp = useCallback((e: React.PointerEvent) => {
-        e.preventDefault();
-
-        if (longPressTimerRef.current) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
-        }
-
-        if (isLongPressRef.current) {
-            stopAudioRecording();
-            isLongPressRef.current = false;
-        } else {
-            if (!isRecording) {
-                toggleRecording();
-            }
-        }
-    }, [isRecording, stopAudioRecording, toggleRecording]);
-
-    // --- Camera Interaction Handlers (Tap = Image, Hold = OCR) ---
-    const handleCameraDown = useCallback((e: React.PointerEvent) => {
-        e.preventDefault();
-        isCameraLongPressRef.current = false;
-
-        cameraLongPressTimerRef.current = setTimeout(() => {
-            isCameraLongPressRef.current = true;
-            setIsOCRMode(true);
-            ocrFileInputRef.current?.click();
-        }, 300);
     }, []);
 
-    const handleCameraUp = useCallback((e: React.PointerEvent) => {
-        e.preventDefault();
+    const handleTranscriptionStart = () => {
+        triggerHaptic();
+        setShowMicMenu(false);
+        toggleRecording();
+    };
 
-        if (cameraLongPressTimerRef.current) {
-            clearTimeout(cameraLongPressTimerRef.current);
-            cameraLongPressTimerRef.current = null;
-        }
+    const handleVoiceNoteStart = () => {
+        triggerHaptic(15);
+        setShowMicMenu(false);
+        startAudioRecording();
+    };
 
-        if (!isCameraLongPressRef.current && !isOCRMode) {
-            // Short tap - regular image attach
-            fileInputRef.current?.click();
-        }
-        isCameraLongPressRef.current = false;
-    }, [isOCRMode]);
+    const handlePhotoStart = () => {
+        triggerHaptic();
+        setShowCameraMenu(false);
+        fileInputRef.current?.click();
+    };
+
+    const handleOCRStart = () => {
+        triggerHaptic(15);
+        setShowCameraMenu(false);
+        ocrFileInputRef.current?.click();
+    };
 
     // --- OCR Processing ---
     const handleOCRUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
         const file = e.target.files[0];
         e.target.value = "";
-        setIsOCRMode(false);
 
         if (!file.type.startsWith('image/')) {
             alert("Please select an image file.");
@@ -601,6 +580,7 @@ export function JournalEditor({
                 ref={fileInputRef}
                 onChange={handleImageUpload}
                 accept="image/*"
+                capture="environment"
                 className="hidden"
             />
 
@@ -613,81 +593,127 @@ export function JournalEditor({
             />
 
             {/* Action Bar */}
-            <div className="flex w-full justify-center gap-6 mt-4 select-none">
-                <button
-                    onPointerDown={(e) => {
-                        if (isGuest && onGuestAction) {
-                            onGuestAction();
-                            return;
-                        }
-                        handleMicDown(e);
-                    }}
-                    onPointerUp={(e) => {
-                        if (isGuest) return;
-                        handleMicUp(e);
-                    }}
-                    onPointerLeave={(e) => {
-                        if (isGuest) return;
-                        if (isLongPressRef.current) handleMicUp(e);
-                        else if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-                    }}
-                    className={cn(
-                        "group p-3 rounded-full transition-all relative",
-                        isRecording ? "bg-zinc-200 dark:bg-zinc-800 ring-2 ring-zinc-300 dark:ring-zinc-700" :
-                            isRecordingAudio ? "bg-red-500/20 ring-2 ring-red-500 scale-110" :
-                                "hover:bg-black/5 dark:hover:bg-white/10"
-                    )}
-                >
-                    {isRecordingAudio ? (
-                        <div className="flex items-center gap-1">
-                            <AudioLines className="w-5 h-5 text-red-500 animate-pulse" />
+            <div className="flex w-full justify-center gap-8 mt-4 select-none">
+
+                {/* Voice Group */}
+                <div className="relative" ref={micMenuRef}>
+                    <button
+                        onClick={() => {
+                            if (isGuest && onGuestAction) {
+                                onGuestAction();
+                                return;
+                            }
+                            if (isRecording) { toggleRecording(); return; }
+                            if (isRecordingAudio) { stopAudioRecording(); return; }
+                            setShowMicMenu(!showMicMenu);
+                            setShowCameraMenu(false);
+                            triggerHaptic(5);
+                        }}
+                        className={cn(
+                            "group p-3.5 rounded-full transition-all duration-300 relative",
+                            isRecording ? "bg-zinc-200 dark:bg-zinc-800 ring-4 ring-zinc-300/30 dark:ring-zinc-700/30" :
+                                isRecordingAudio ? "bg-red-500 scale-110 shadow-lg shadow-red-500/20" :
+                                    showMicMenu ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700" :
+                                        "hover:bg-black/5 dark:hover:bg-white/10"
+                        )}
+                    >
+                        {isRecordingAudio ? (
+                            <AudioLines className="w-5 h-5 text-white animate-pulse" />
+                        ) : isRecording ? (
+                            <Square className="w-5 h-5 text-zinc-900 dark:text-zinc-100" />
+                        ) : (
+                            <Mic className={cn("w-6 h-6 text-zinc-600 transition-colors", hoverClass)} />
+                        )}
+                    </button>
+
+                    {/* Mic Menu Bubble */}
+                    {showMicMenu && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl flex flex-col gap-1 min-w-[160px] animate-in slide-in-from-bottom-2 fade-in duration-200 z-50">
+                            <button
+                                onClick={handleTranscriptionStart}
+                                className="flex items-center gap-3 p-3 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-2xl transition-colors text-left"
+                            >
+                                <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center">
+                                    <Mic className="w-4 h-4 text-indigo-500" />
+                                </div>
+                                <div>
+                                    <div className="text-zinc-900 dark:text-zinc-100 text-sm font-semibold">Transcription</div>
+                                    <div className="text-zinc-500 text-[10px]">Type as you speak</div>
+                                </div>
+                            </button>
+                            <button
+                                onClick={handleVoiceNoteStart}
+                                className="flex items-center gap-3 p-3 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-2xl transition-colors text-left"
+                            >
+                                <div className="w-8 h-8 rounded-xl bg-red-50 dark:bg-red-500/10 flex items-center justify-center">
+                                    <AudioLines className="w-4 h-4 text-red-500" />
+                                </div>
+                                <div>
+                                    <div className="text-zinc-900 dark:text-zinc-100 text-sm font-semibold">Voice Note</div>
+                                    <div className="text-zinc-500 text-[10px]">Save original audio</div>
+                                </div>
+                            </button>
                         </div>
-                    ) : isRecording ? (
-                        <Square className="w-5 h-5 text-zinc-900 dark:text-zinc-100" />
-                    ) : (
-                        <Mic className={cn("w-5 h-5 text-zinc-600 transition-colors", hoverClass)} />
                     )}
+                </div>
 
-                    <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-[10px] text-zinc-600 opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity">
-                        Tap to Type • Hold to Record
-                    </span>
-                </button>
-                <button
-                    onPointerDown={(e) => {
-                        if (isGuest && onGuestAction) {
-                            onGuestAction();
-                            return;
-                        }
-                        handleCameraDown(e);
-                    }}
-                    onPointerUp={(e) => {
-                        if (isGuest) return;
-                        handleCameraUp(e);
-                    }}
-                    onPointerLeave={() => {
-                        if (isGuest) return;
-                        if (cameraLongPressTimerRef.current) {
-                            clearTimeout(cameraLongPressTimerRef.current);
-                            cameraLongPressTimerRef.current = null;
-                        }
-                        isCameraLongPressRef.current = false;
-                    }}
-                    disabled={isUploading || isProcessingOCR}
-                    className={cn(
-                        "group p-3 rounded-full transition-all disabled:opacity-50 disabled:cursor-not-allowed relative",
-                        isProcessingOCR ? "bg-blue-500/20 ring-2 ring-blue-500" : "hover:bg-black/5 dark:hover:bg-white/10"
-                    )}
-                >
-                    {isProcessingOCR ? (
-                        <Camera className="w-5 h-5 text-blue-500 animate-pulse" />
-                    ) : (
-                        <Camera className={cn("w-5 h-5 text-zinc-600 transition-colors", hoverClass)} />
-                    )}
+                {/* Camera Group */}
+                <div className="relative" ref={cameraMenuRef}>
+                    <button
+                        onClick={() => {
+                            if (isGuest && onGuestAction) {
+                                onGuestAction();
+                                return;
+                            }
+                            setShowCameraMenu(!showCameraMenu);
+                            setShowMicMenu(false);
+                            triggerHaptic(5);
+                        }}
+                        disabled={isUploading || isProcessingOCR}
+                        className={cn(
+                            "group p-3.5 rounded-full transition-all duration-300 disabled:opacity-50 relative",
+                            isProcessingOCR ? "bg-blue-500/20 ring-4 ring-blue-500/20" :
+                                showCameraMenu ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700" :
+                                    "hover:bg-black/5 dark:hover:bg-white/10"
+                        )}
+                    >
+                        {isProcessingOCR ? (
+                            <Camera className="w-6 h-6 text-blue-500 animate-pulse" />
+                        ) : (
+                            <Camera className={cn("w-6 h-6 text-zinc-600 transition-colors", hoverClass)} />
+                        )}
+                    </button>
 
-                    <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-[10px] text-zinc-600 opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity">
-                        Tap to Attach • Hold to Scan
-                    </span>
-                </button>
+                    {/* Camera Menu Bubble */}
+                    {showCameraMenu && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl flex flex-col gap-1 min-w-[160px] animate-in slide-in-from-bottom-2 fade-in duration-200 z-50">
+                            <button
+                                onClick={handlePhotoStart}
+                                className="flex items-center gap-3 p-3 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-2xl transition-colors text-left"
+                            >
+                                <div className="w-8 h-8 rounded-xl bg-orange-50 dark:bg-orange-500/10 flex items-center justify-center">
+                                    <Camera className="w-4 h-4 text-orange-500" />
+                                </div>
+                                <div>
+                                    <div className="text-zinc-900 dark:text-zinc-100 text-sm font-semibold">Snap Photo</div>
+                                    <div className="text-zinc-500 text-[10px]">Instant capture</div>
+                                </div>
+                            </button>
+                            <button
+                                onClick={handleOCRStart}
+                                className="flex items-center gap-3 p-3 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-2xl transition-colors text-left"
+                            >
+                                <div className="w-8 h-8 rounded-xl bg-blue-50 dark:bg-blue-500/10 flex items-center justify-center">
+                                    <AudioLines className="w-4 h-4 text-blue-500" />
+                                </div>
+                                <div>
+                                    <div className="text-zinc-900 dark:text-zinc-100 text-sm font-semibold">Scan Text</div>
+                                    <div className="text-zinc-500 text-[10px]">Convert to text</div>
+                                </div>
+                            </button>
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );
