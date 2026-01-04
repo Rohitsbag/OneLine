@@ -28,9 +28,13 @@ const FadeIn = ({ children, delay = 0, className = "" }: { children: ReactNode, 
     const domRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        const observer = new IntersectionObserver(entries => {
-            entries.forEach(entry => setIsVisible(entry.isIntersecting));
-        }, { threshold: 0.1 });
+        const observer = new IntersectionObserver(([entry]) => {
+            if (entry.isIntersecting) {
+                setIsVisible(true);
+                observer.unobserve(entry.target);
+            }
+        }, { threshold: 0.1, rootMargin: '50px' });
+
         if (domRef.current) observer.observe(domRef.current);
         return () => observer.disconnect();
     }, []);
@@ -38,7 +42,7 @@ const FadeIn = ({ children, delay = 0, className = "" }: { children: ReactNode, 
     return (
         <div
             ref={domRef}
-            className={`transition-all duration-1000 ease-out transform ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+            className={`transition-all duration-700 ease-out transform ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'
                 } ${className}`}
             style={{ transitionDelay: `${delay}ms` }}
         >

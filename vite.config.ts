@@ -12,4 +12,18 @@ export default defineConfig({
             "@": path.resolve(__dirname, "./src"),
         },
     },
+    build: {
+        rollupOptions: {
+            output: {
+                manualChunks: {
+                    'three-bundle': ['three'],
+                    'vendor': ['react', 'react-dom', 'react-router-dom'],
+                }
+            }
+        },
+        chunkSizeWarningLimit: 1000,
+        cssCodeSplit: true,
+        minify: 'esbuild',
+        target: 'esnext'
+    }
 })
