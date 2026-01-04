@@ -1023,14 +1023,19 @@ export function JournalEditor({
                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl flex flex-col gap-1 min-w-[160px] animate-in slide-in-from-bottom-2 fade-in duration-200 z-50">
                             <button
                                 onClick={handleTranscriptionStart}
-                                className="flex items-center gap-3 p-3 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-2xl transition-colors text-left"
+                                disabled={isTranscribing}
+                                className="flex items-center gap-3 p-3 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-2xl transition-colors text-left disabled:opacity-50 disabled:cursor-wait"
                             >
                                 <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center">
-                                    <Mic className="w-4 h-4 text-indigo-500" />
+                                    <Mic className={cn("w-4 h-4 text-indigo-500", isTranscribing && "animate-pulse")} />
                                 </div>
                                 <div>
-                                    <div className="text-zinc-900 dark:text-zinc-100 text-sm font-semibold">Transcription</div>
-                                    <div className="text-zinc-500 text-[10px]">Type as you speak</div>
+                                    <div className="text-zinc-900 dark:text-zinc-100 text-sm font-semibold">
+                                        {isTranscribing ? "Processing..." : "Transcription"}
+                                    </div>
+                                    <div className="text-zinc-500 text-[10px]">
+                                        {isTranscribing ? "Converting audio..." : "Type as you speak"}
+                                    </div>
                                 </div>
                             </button>
                             <button
