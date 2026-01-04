@@ -117,6 +117,19 @@ serve(async (req: Request) => {
 
         if (body.action === "chat") {
             // Chat Completions
+            const allowedModels = [
+                "llama-3.3-70b-versatile",
+                "llama-3.2-11b-vision-preview",
+                "meta-llama/llama-4-maverick-17b-128e-instruct",
+                "meta-llama/llama-4-scout-17b-16e-instruct"
+            ];
+
+            const requestedModel = body.model || "llama-3.3-70b-versatile";
+
+            // Allow Llama 4 models or default Llama 3 models
+            // Safety check: ensure requested model is in our allowlist
+            const modelToUse = allowedModels.includes(requestedModel) ? requestedModel : "llama-3.3-70b-versatile";
+
             const response = await fetch(`${GROQ_BASE_URL}/chat/completions`, {
                 method: "POST",
                 headers: {
@@ -124,7 +137,7 @@ serve(async (req: Request) => {
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify({
-                    model: body.model || "llama-3.3-70b-versatile",
+                    model: modelToUse,
                     messages: body.messages,
                     temperature: body.temperature ?? 0.7,
                     max_tokens: body.max_tokens ?? 300,
@@ -156,44 +169,49 @@ serve(async (req: Request) => {
 
             // Decode base64 audio
             const audioBytes = Uint8Array.from(atob(body.audio), c => c.charCodeAt(0));
+            // Whisper API expects 'file' part. Blob type is important.
             const audioBlob = new Blob([audioBytes], { type: "audio/webm" });
 
-            // Try whisper models in order
-            const models = ["whisper-large-v3", "whisper-large-v3-turbo"];
+            // Tiered Model Selection: User requested specific tiers
+            // If body.model is provided (e.g. 'whisper-large-v3-turbo' for data saver), use it.
+            // Default to high quality 'whisper-large-v3'.
+            const model = body.model === "whisper-large-v3-turbo" ? "whisper-large-v3-turbo" : "whisper-large-v3";
 
-            for (const model of models) {
-                try {
-                    const formData = new FormData();
-                    formData.append("file", audioBlob, "audio.webm");
-                    formData.append("model", model);
-                    formData.append("response_format", "text");
+            try {
+                const formData = new FormData();
+                formData.append("file", audioBlob, "audio.webm");
+                formData.append("model", model);
+                // formData.append("response_format", "text"); // JSON is better for error handling
 
-                    const response = await fetch(`${GROQ_BASE_URL}/audio/transcriptions`, {
-                        method: "POST",
-                        headers: {
-                            "Authorization": `Bearer ${GROQ_API_KEY}`,
-                        },
-                        body: formData,
-                    });
+                const response = await fetch(`${GROQ_BASE_URL}/audio/transcriptions`, {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${GROQ_API_KEY}`,
+                        // Content-Type is multipart/form-data, fetch sets boundary automatically
+                    },
+                    body: formData,
+                });
 
-                    if (response.ok) {
-                        const text = await response.text();
-                        return new Response(
-                            JSON.stringify({ text, model }),
-                            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-                        );
-                    }
-                } catch (e) {
-                    console.error(`Model ${model} failed:`, e);
-                    continue;
+                const data = await response.json();
+
+                if (response.ok) {
+                    return new Response(
+                        JSON.stringify({ text: data.text }),
+                        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                    );
+                } else {
+                    return new Response(
+                        JSON.stringify({ error: data.error?.message || "Transcription failed" }),
+                        { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                    );
                 }
+            } catch (e) {
+                console.error(`Transcription with ${model} failed:`, e);
+                return new Response(
+                    JSON.stringify({ error: "Internal transcription error" }),
+                    { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                );
             }
-
-            // All models failed
-            return new Response(
-                JSON.stringify({ error: "Transcription failed", fallback: true }),
-                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
 
         } else {
             return new Response(

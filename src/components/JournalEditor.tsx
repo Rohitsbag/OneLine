@@ -202,33 +202,53 @@ export function JournalEditor({
         }
     };
 
-    // Fetch Entry
+    // Fetch Entry (OFFLINE-FIRST)
     const fetchEntry = useCallback(async () => {
         if (!userId) return;
 
-        setContent("");
-        setImagePath(null);
-        setDisplayUrl(null);
-
-        setIsLoading(true);
         const dateStr = format(currentDate, 'yyyy-MM-dd');
+        const cacheKey = `entry_cache_${userId}_${dateStr}`;
 
-        const { data, error } = await supabase
-            .from('entries')
-            .select('content, image_url, audio_url')
-            .eq('user_id', userId)
-            .eq('date', dateStr)
-            .single();
+        // STEP 1: Load from localStorage cache first (instant)
+        const cachedEntry = localStorage.getItem(cacheKey);
+        if (cachedEntry) {
+            const cached = JSON.parse(cachedEntry);
+            setContent(cached.content || "");
+            setImagePath(cached.image_url || null);
+            setAudioPath(cached.audio_url || null);
+        } else {
+            // No cache - start fresh
+            setContent("");
+            setImagePath(null);
+            setDisplayUrl(null);
+        }
+        setIsLoading(true);
 
-        if (error && error.code !== 'PGRST116') {
-            console.error('Error fetching entry:', error);
+        // STEP 2: Try to fetch from server (if online)
+        try {
+            const { data, error } = await supabase
+                .from('entries')
+                .select('content, image_url, audio_url, updated_at')
+                .eq('user_id', userId)
+                .eq('date', dateStr)
+                .single();
+
+            if (error && error.code !== 'PGRST116') {
+                // Network error or other - we already have cache data
+                console.log('Server fetch failed, using cached data');
+            } else if (data && isMountedRef.current) {
+                // Update cache with server data
+                localStorage.setItem(cacheKey, JSON.stringify(data));
+                setContent(data.content || "");
+                setImagePath(data.image_url || null);
+                setAudioPath(data.audio_url || null);
+            }
+        } catch (error) {
+            // Offline - already using cached data
+            console.log('Offline mode - using cached entry');
         }
 
-        // MEMORY LEAK GUARD: Only update state if still mounted
         if (isMountedRef.current) {
-            setContent(data?.content || "");
-            setImagePath(data?.image_url || null);
-            setAudioPath(data?.audio_url || null);
             setIsLoading(false);
         }
     }, [currentDate, userId]);
@@ -289,14 +309,25 @@ export function JournalEditor({
     const saveEntry = useCallback(async (dateStr: string, currentContent: string, currentImagePath: string | null, currentAudioPath: string | null) => {
         if (!userId) return;
 
-        // Helper to save to offline storage (date-keyed)
+        // OFFLINE-FIRST: Always update local cache first
+        const cacheKey = `entry_cache_${userId}_${dateStr}`;
+        const cacheData = {
+            content: currentContent,
+            image_url: currentImagePath,
+            audio_url: currentAudioPath,
+            updated_at: new Date().toISOString()
+        };
+        localStorage.setItem(cacheKey, JSON.stringify(cacheData));
+
+        // Helper to save to pending sync queue (for server sync)
         const saveOffline = () => {
             const existingRaw = localStorage.getItem('pending_journal_sync');
             const existing = existingRaw ? JSON.parse(existingRaw) : {};
             existing[dateStr] = {
                 content: currentContent,
                 image_url: currentImagePath,
-                audio_url: currentAudioPath
+                audio_url: currentAudioPath,
+                updated_at: cacheData.updated_at
             };
             localStorage.setItem('pending_journal_sync', JSON.stringify(existing));
         };
@@ -565,71 +596,115 @@ export function JournalEditor({
         await supabase.from('entries').update({ audio_url: null }).eq('user_id', userId).eq('date', dateStr);
     };
 
-    // --- STT Logic ---
-    const toggleRecording = () => {
+    // --- STT Logic (Tiered: Whisper Online / WebSpeech Offline) ---
+    const [isTranscribing, setIsTranscribing] = useState(false);
+
+    const toggleRecording = async () => {
         if (isRecording) {
-            if (recognitionRef.current) recognitionRef.current.stop();
-            setIsRecording(false);
-        } else {
-            const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-            if (!SpeechRecognition) {
-                alert("Voice recognition not supported.");
-                return;
+            // STOP RECORDING
+            if (recognitionRef.current) {
+                // Offline mode stop
+                recognitionRef.current.stop();
+                setIsRecording(false);
+            } else if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+                // Online mode stop
+                mediaRecorderRef.current.stop();
+                setIsRecording(false);
             }
+        } else {
+            // START RECORDING
 
-            const recognition = new SpeechRecognition();
-            recognition.continuous = true;
-            recognition.interimResults = false; // FIXED: Only get final results to avoid duplication
-            recognition.lang = 'en-US';
+            // Check Network Tier
+            const { detectNetworkTier, getSTTModel } = await import("@/utils/stt-tiered");
+            const tier = detectNetworkTier();
 
-            recognition.onstart = () => {
-                setIsRecording(true);
-                // Track accumulated text from this session
-                lastAppendedTextRef.current = "";
-            };
-            recognition.onend = () => {
-                setIsRecording(false);
-                recognitionRef.current = null;
-            };
-            recognition.onerror = (e: any) => {
-                console.warn('Speech recognition error:', e.error);
-                if (e.error === 'not-allowed') {
-                    alert("Speech recognition permission denied. Please check your system/app settings.");
-                } else if (e.error === 'network') {
-                    alert("Speech recognition failed: Network error. Please check your connection.");
+            if (tier === "offline") {
+                // === OFFLINE MODE: Web Speech API ===
+                const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+                if (!SpeechRecognition) {
+                    alert("Offline voice recognition not supported on this device.");
+                    return;
                 }
-                setIsRecording(false);
-                recognitionRef.current = null;
-            };
 
-            recognition.onresult = (event: any) => {
-                // With interimResults=false, each result is a complete, finalized phrase
-                const latestResult = event.results[event.results.length - 1];
-                if (latestResult.isFinal) {
-                    const newText = latestResult[0].transcript.trim();
+                const recognition = new SpeechRecognition();
+                recognition.continuous = true;
+                recognition.interimResults = false;
+                recognition.lang = 'en-US';
 
-                    if (!newText) return;
+                recognition.onstart = () => {
+                    setIsRecording(true);
+                    lastAppendedTextRef.current = "";
+                };
+                recognition.onend = () => {
+                    setIsRecording(false);
+                    recognitionRef.current = null;
+                };
+                recognition.onerror = (e: any) => {
+                    console.warn('Speech recognition error:', e.error);
+                    setIsRecording(false);
+                };
+                recognition.onresult = (event: any) => {
+                    const latestResult = event.results[event.results.length - 1];
+                    if (latestResult.isFinal) {
+                        const newText = latestResult[0].transcript.trim();
+                        if (!newText || newText === lastAppendedTextRef.current) return;
 
-                    // Simple duplicate check: don't add if exact same as last
-                    if (newText === lastAppendedTextRef.current) {
-                        return;
+                        lastAppendedTextRef.current = newText;
+                        setContent(prev => {
+                            const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                            return prev + (needsSpace ? ' ' : '') + newText;
+                        });
                     }
+                };
 
-                    lastAppendedTextRef.current = newText;
+                recognitionRef.current = recognition;
+                recognition.start();
 
-                    setContent(prev => {
-                        // Don't append if content already ends with this text
-                        if (prev.trim().endsWith(newText)) {
-                            return prev;
+            } else {
+                // === ONLINE MODE: Whisper (High Quality) ===
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                    const chunks: BlobPart[] = [];
+
+                    mediaRecorder.ondataavailable = (e) => {
+                        if (e.data.size > 0) chunks.push(e.data);
+                    };
+
+                    mediaRecorder.onstop = async () => {
+                        const blob = new Blob(chunks, { type: 'audio/webm' });
+                        // Clean up stream tracks
+                        stream.getTracks().forEach(track => track.stop());
+
+                        setIsTranscribing(true);
+                        try {
+                            const { transcribeAudio } = await import("@/utils/ai");
+                            const model = getSTTModel(tier); // whisper-large-v3 or turbo
+
+                            const text = await transcribeAudio(blob, model);
+                            if (text && isMountedRef.current) {
+                                setContent(prev => {
+                                    const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                    return prev + (needsSpace ? ' ' : '') + text;
+                                });
+                            }
+                        } catch (err) {
+                            console.error("Transcription failed:", err);
+                            alert("Transcription failed. Please try again.");
+                        } finally {
+                            if (isMountedRef.current) setIsTranscribing(false);
                         }
-                        const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                        return prev + (needsSpace ? ' ' : '') + newText;
-                    });
-                }
-            };
+                    };
 
-            recognitionRef.current = recognition;
-            recognition.start();
+                    mediaRecorderRef.current = mediaRecorder;
+                    mediaRecorder.start();
+                    setIsRecording(true);
+
+                } catch (err) {
+                    console.error("Mic error:", err);
+                    alert("Could not access microphone.");
+                }
+            }
         }
     };
 
@@ -663,7 +738,7 @@ export function JournalEditor({
         ocrFileInputRef.current?.click();
     };
 
-    // --- OCR Processing ---
+    // --- OCR Processing (HYBRID: Online + Offline Fallback) ---
     const handleOCRUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
         const file = e.target.files[0];
@@ -675,15 +750,30 @@ export function JournalEditor({
         }
 
         setIsProcessingOCR(true);
-        try {
-            // BUG FIX: Compress large images before sending to OCR API
-            // Phone cameras produce 5-15MB images which exceed API limits
-            const compressedBlob = await compressImage(file);
-            const compressedFile = new File([compressedBlob], file.name, { type: 'image/webp' });
 
-            const text = await performOCR(compressedFile);
+        // Check if online for high-quality OCR
+        const isOnline = navigator.onLine;
+
+        if (!isOnline) {
+            // Show quality notice for offline mode
+            alert("📶 Connect to internet for higher quality scan.\n\nUsing offline OCR (may be less accurate for handwriting).");
+        }
+
+        try {
+            let text = "";
+
+            if (isOnline) {
+                // ONLINE: Use Groq Vision API (high quality)
+                const compressedBlob = await compressImage(file);
+                const compressedFile = new File([compressedBlob], file.name, { type: 'image/webp' });
+                text = await performOCR(compressedFile);
+            } else {
+                // OFFLINE: Use Tesseract.js (local processing)
+                const { extractTextOffline } = await import('@/utils/ocr-offline');
+                text = await extractTextOffline(file);
+            }
+
             if (text && isMountedRef.current) {
-                // Append extracted text to content
                 setContent(prev => {
                     const needsSpace = prev.length > 0 && !prev.endsWith(' ') && !prev.endsWith('\n');
                     return prev + (needsSpace ? '\n\n' : '') + text;

@@ -4,11 +4,8 @@ const config: CapacitorConfig = {
     appId: 'com.oneline.app',
     appName: 'OneLine',
     webDir: 'dist',
-    server: {
-        // Load the live Vercel deployment
-        url: 'https://get-one-line.vercel.app',
-        cleartext: false
-    },
+    // OFFLINE-FIRST: No server URL = bundle locally in APK
+    // App works without internet, syncs when connected
     android: {
         allowMixedContent: false,
         webContentsDebuggingEnabled: false

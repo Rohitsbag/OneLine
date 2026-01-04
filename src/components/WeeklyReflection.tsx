@@ -18,6 +18,12 @@ export function WeeklyReflection({ accentColor = "bg-indigo-500" }: WeeklyReflec
     const hoverBgClass = accentObj.hoverBgClass;
 
     const generate = async () => {
+        // OFFLINE-FIRST: Check connectivity before AI call
+        if (!navigator.onLine) {
+            setReflection("AI features require internet connection. Please try again when online.");
+            return;
+        }
+
         setIsLoading(true);
         try {
             const { data: { session } } = await supabase.auth.getSession();
@@ -32,7 +38,7 @@ export function WeeklyReflection({ accentColor = "bg-indigo-500" }: WeeklyReflec
 
         } catch (e) {
             console.error(e);
-            setReflection("An error occurred.");
+            setReflection("An error occurred. Please check your connection and try again.");
         } finally {
             setIsLoading(false);
         }

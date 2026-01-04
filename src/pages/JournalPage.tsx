@@ -53,35 +53,72 @@ export function JournalPage() {
     const [isLoadingAuth, setIsLoadingAuth] = useState(true);
     const [showAuthModal, setShowAuthModal] = useState(false);
 
-    // Auth & Initial Data Fetch
+    // Auth & Initial Data Fetch (OFFLINE-FIRST)
     useEffect(() => {
         const initData = async () => {
-            const { data: { user } } = await supabase.auth.getSession().then(({ data }) => ({ data: { user: data.session?.user || null } }));
+            // OFFLINE-FIRST: Try to get cached user first for instant startup
+            const cachedUserRaw = localStorage.getItem('cached_user');
+            let cachedUser = cachedUserRaw ? JSON.parse(cachedUserRaw) : null;
 
-            if (!user) {
-                // Determine if we are in "guest preview" mode (redirected from Landing Page "Start Writing")
-                // For now, if no user, we assume guest mode if they landed on /app
-                setIsGuest(true);
-                setIsLoadingAuth(false);
-                return;
+            // Try to get fresh session
+            try {
+                const { data: { session } } = await supabase.auth.getSession();
+                const user = session?.user || null;
+
+                if (user) {
+                    // Cache user for offline use
+                    localStorage.setItem('cached_user', JSON.stringify({
+                        id: user.id,
+                        email: user.email,
+                        created_at: user.created_at
+                    }));
+                    cachedUser = user;
+                } else if (!cachedUser) {
+                    // No session and no cache = guest mode
+                    setIsGuest(true);
+                    setIsLoadingAuth(false);
+                    return;
+                }
+                // If we have cachedUser but no fresh session, continue in offline mode
+            } catch (error) {
+                // Network error - continue with cached user if available
+                console.log('Auth check failed (offline?), using cached user');
+                if (!cachedUser) {
+                    setIsGuest(true);
+                    setIsLoadingAuth(false);
+                    return;
+                }
             }
 
             // 1. Set Min Date (Account Creation)
-            if (user.created_at) {
-                setMinDate(new Date(user.created_at));
+            if (cachedUser?.created_at) {
+                setMinDate(new Date(cachedUser.created_at));
             }
 
-            // 2. Load User Settings
-            const { data: settings } = await supabase
-                .from('user_settings')
-                .select('*')
-                .eq('user_id', user.id)
-                .single();
+            // 2. Load User Settings (try from cache first, then server)
+            let settings = null;
+            const cachedSettings = localStorage.getItem('cached_user_settings');
+
+            try {
+                const { data } = await supabase
+                    .from('user_settings')
+                    .select('*')
+                    .eq('user_id', cachedUser.id)
+                    .single();
+
+                if (data) {
+                    settings = data;
+                    localStorage.setItem('cached_user_settings', JSON.stringify(data));
+                }
+            } catch (error) {
+                // Offline - use cached settings
+                if (cachedSettings) {
+                    settings = JSON.parse(cachedSettings);
+                }
+            }
 
             if (settings) {
                 setAiEnabled(settings.ai_enabled ?? true);
-                // Only apply DB theme if localStorage doesn't have one (new device scenario)
-                // LocalStorage is the source of truth for theme toggling
                 const localTheme = localStorage.getItem('theme');
                 if (!localTheme && settings.theme) {
                     setIsDark(settings.theme === 'dark');
@@ -89,7 +126,6 @@ export function JournalPage() {
                 if (settings.accent_color) {
                     setAccentColor(settings.accent_color);
                 }
-                // Handle voice enabled if we add it to state
             }
             setIsLoadingAuth(false);
         };

@@ -59,9 +59,10 @@ export async function performOCR(imageFile: File): Promise<string> {
             setTimeout(() => reject(new Error("OCR Request Timed Out")), 30000)
         );
 
-        const ocrPromise = callAIProxy({
+        // Helper for calling OCR with specific model
+        const callOCRModel = (model: string) => callAIProxy({
             action: "chat",
-            model: "llama-3.2-11b-vision-preview",
+            model: model,
             messages: [
                 {
                     role: "user",
@@ -75,14 +76,79 @@ export async function performOCR(imageFile: File): Promise<string> {
             max_tokens: 1000
         });
 
-        const result = await Promise.race([ocrPromise, timeoutPromise]);
-        return result;
+        try {
+            // TIER 1: Main (Maverick)
+            const mainPromise = callOCRModel("meta-llama/llama-4-maverick-17b-128e-instruct");
+            return await Promise.race([mainPromise, timeoutPromise]);
+        } catch (mainError) {
+            console.warn("Main OCR model failed, trying fallback...", mainError);
+
+            // TIER 2: Fallback (Scout)
+            // Reset timeout for fallback attempt
+            const fallbackTimeout = new Promise<string>((_, reject) =>
+                setTimeout(() => reject(new Error("OCR Fallback Timed Out")), 30000)
+            );
+            const fallbackPromise = callOCRModel("meta-llama/llama-4-scout-17b-16e-instruct");
+            return await Promise.race([fallbackPromise, fallbackTimeout]);
+        }
+
     } catch (error) {
         console.error("OCR Error:", error);
-        if (error instanceof Error && error.message === "OCR Request Timed Out") {
+        if (error instanceof Error && (error.message === "OCR Request Timed Out" || error.message === "OCR Fallback Timed Out")) {
             throw new Error("OCR is taking too long. Please try again with a smaller image.");
         }
         throw new Error(error instanceof Error ? error.message : "Failed to extract text from image");
+    }
+}
+
+export async function transcribeAudio(audioBlob: Blob, model: string): Promise<string> {
+    try {
+        // Convert blob to base64
+        const base64Audio = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(audioBlob);
+            reader.onload = () => {
+                const base64 = reader.result as string;
+                // Remove data URL prefix (e.g., "data:audio/webm;base64,")
+                resolve(base64.split(',')[1]);
+            };
+            reader.onerror = error => reject(error);
+        });
+
+        // 60 second timeout for transcription
+        const timeoutPromise = new Promise<string>((_, reject) =>
+            setTimeout(() => reject(new Error("Transcription Timed Out")), 60000)
+        );
+
+        const transcribeCall = async (): Promise<string> => {
+            const { data: { session } } = await supabase.auth.getSession();
+            const response = await fetch(AI_PROXY_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${session?.access_token || ""}`,
+                },
+                body: JSON.stringify({
+                    action: "transcribe",
+                    audio: base64Audio,
+                    model: model
+                }),
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || "Transcription failed");
+            }
+
+            const data = await response.json();
+            return data.text || "";
+        }
+
+        return await Promise.race([transcribeCall(), timeoutPromise]);
+
+    } catch (error) {
+        console.error("Transcription Error:", error);
+        throw error;
     }
 }
 
