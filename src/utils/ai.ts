@@ -10,7 +10,7 @@ const AI_PROXY_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-proxy
 interface ChatRequest {
     action: "chat";
     model?: string;
-    messages: Array<{ role: string; content: string }>;
+    messages: Array<{ role: string; content: string | Array<any> }>;
     temperature?: number;
     max_tokens?: number;
 }
@@ -34,6 +34,39 @@ async function callAIProxy(body: ChatRequest): Promise<string> {
 
     const data = await response.json();
     return data.text || "";
+}
+
+export async function performOCR(imageFile: File): Promise<string> {
+    try {
+        // Convert image to base64
+        const base64Image = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(imageFile);
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = error => reject(error);
+        });
+
+        const result = await callAIProxy({
+            action: "chat",
+            model: "llama-3.2-11b-vision-preview",
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        { type: "text", text: "Extract all text from this image. Preserve the formatting (newlines). Return ONLY the extracted text, do not add any conversational filler." },
+                        { type: "image_url", image_url: { url: base64Image } }
+                    ]
+                }
+            ],
+            temperature: 0.1,
+            max_tokens: 1000
+        });
+
+        return result;
+    } catch (error) {
+        console.error("OCR Error:", error);
+        throw new Error("Failed to extract text from image");
+    }
 }
 
 export async function generateWeeklyReflection(userId: string): Promise<string> {

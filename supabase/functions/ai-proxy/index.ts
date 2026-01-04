@@ -15,7 +15,7 @@ interface RequestBody {
     action: "chat" | "transcribe";
     // For chat completions
     model?: string;
-    messages?: Array<{ role: string; content: string }>;
+    messages?: Array<{ role: string; content: string | Array<any> }>;
     temperature?: number;
     max_tokens?: number;
     // For transcription

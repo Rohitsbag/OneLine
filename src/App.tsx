@@ -1,5 +1,6 @@
-import { Suspense, lazy } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Suspense, lazy, useEffect } from 'react';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { Capacitor } from '@capacitor/core';
 
 // Lazy load pages for performance optimization
 export const loadAuthPage = () => import('@/pages/AuthPage');
@@ -19,6 +20,15 @@ const PageLoader = () => (
 );
 
 function App() {
+    const navigate = useNavigate();
+    const location = useLocation();
+
+    useEffect(() => {
+        if (Capacitor.isNativePlatform() && location.pathname === '/') {
+            navigate('/app');
+        }
+    }, [location, navigate]);
+
     return (
         <Suspense fallback={<PageLoader />}>
             <Routes>

@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { compressImage } from "@/utils/image";
 import { AudioPlayer } from "./AudioPlayer";
 import { ACCENT_COLORS } from "@/constants/colors";
-import { extractTextFromImage } from "@/utils/ocr";
+import { performOCR } from "@/utils/ai";
 
 interface JournalEditorProps {
     date: Date;
@@ -34,6 +34,8 @@ export function JournalEditor({
     const [isRecording, setIsRecording] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
     const [hasError, setHasError] = useState(false);
+    const [isOffline, setIsOffline] = useState(!navigator.onLine);
+    const [pendingSync, setPendingSync] = useState(false);
 
     const [userId, setUserId] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -97,6 +99,50 @@ export function JournalEditor({
             }
         };
     }, []);
+
+    // Offline / Online Listener
+    useEffect(() => {
+        const handleOnline = () => {
+            setIsOffline(false);
+            syncPendingData();
+        };
+        const handleOffline = () => setIsOffline(true);
+
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, [userId]);
+
+    const syncPendingData = async () => {
+        const pending = localStorage.getItem('pending_journal_sync');
+        if (pending && userId) {
+            setPendingSync(true);
+            try {
+                const { date, content } = JSON.parse(pending);
+                const { error } = await supabase
+                    .from('entries')
+                    .upsert({
+                        user_id: userId,
+                        date: date,
+                        content: content,
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'user_id, date' });
+
+                if (!error) {
+                    localStorage.removeItem('pending_journal_sync');
+                    console.log("Synced pending data");
+                }
+            } catch (e) {
+                console.error("Sync failed", e);
+            } finally {
+                setPendingSync(false);
+            }
+        }
+    };
 
     // Fetch Entry
     const fetchEntry = useCallback(async () => {
@@ -181,6 +227,18 @@ export function JournalEditor({
 
         const timeoutId = setTimeout(async () => {
             setIsSaving(true);
+
+            // Offline Logic
+            if (!navigator.onLine) {
+                localStorage.setItem('pending_journal_sync', JSON.stringify({
+                    date: dateStr,
+                    content: content
+                }));
+                setIsOffline(true);
+                setIsSaving(false);
+                return;
+            }
+
             const { error } = await supabase
                 .from('entries')
                 .upsert({
@@ -195,8 +253,14 @@ export function JournalEditor({
             if (error) {
                 console.error('Error saving:', error);
                 setHasError(true);
+                // Fallback to local storage on error
+                localStorage.setItem('pending_journal_sync', JSON.stringify({
+                    date: dateStr,
+                    content: content
+                }));
             } else {
                 setHasError(false);
+                localStorage.removeItem('pending_journal_sync');
             }
             setIsSaving(false);
         }, 1000);
@@ -381,6 +445,11 @@ export function JournalEditor({
                 }
                 if (finalTranscript) {
                     setContent(prev => {
+                        const trimmedFinal = finalTranscript.trim();
+                        // Simple deduplication: Check if the last part of content matches the new transcript
+                        if (prev.trim().endsWith(trimmedFinal)) {
+                            return prev;
+                        }
                         const needsSpace = prev.length > 0 && !prev.endsWith(' ');
                         return prev + (needsSpace ? ' ' : '') + finalTranscript;
                     });
@@ -435,12 +504,12 @@ export function JournalEditor({
 
         setIsProcessingOCR(true);
         try {
-            const result = await extractTextFromImage(file);
-            if (result.success && result.text) {
+            const text = await performOCR(file);
+            if (text) {
                 // Append extracted text to content
                 setContent(prev => {
                     const needsSpace = prev.length > 0 && !prev.endsWith(' ') && !prev.endsWith('\n');
-                    return prev + (needsSpace ? '\n\n' : '') + result.text;
+                    return prev + (needsSpace ? '\n\n' : '') + text;
                 });
             } else {
                 alert("Could not extract text from this image.");
@@ -590,7 +659,6 @@ export function JournalEditor({
                 ref={fileInputRef}
                 onChange={handleImageUpload}
                 accept="image/*"
-                capture="environment"
                 className="hidden"
             />
 
@@ -599,6 +667,7 @@ export function JournalEditor({
                 ref={ocrFileInputRef}
                 onChange={handleOCRUpload}
                 accept="image/*"
+                capture="environment"
                 className="hidden"
             />
 
