@@ -662,7 +662,6 @@ export function JournalEditor({
                 recognition.onresult = (event: any) => {
                     const latestResult = event.results[event.results.length - 1];
                     if (latestResult.isFinal) {
-                        const newText = latestResult[0].transcript.trim();
                         // ROBUST STT DEDUPLICATION (Master Prompt #5)
                         const newText = latestResult[0].transcript.trim();
                         if (!newText) return;
@@ -697,7 +696,9 @@ export function JournalEditor({
                 // === ONLINE MODE: Whisper (High Quality) ===
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                    // Determine supported MIME type for Mobile/Desktop compatibility
+                    const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+                    const mediaRecorder = new MediaRecorder(stream, { mimeType });
                     const chunks: BlobPart[] = [];
 
                     mediaRecorder.ondataavailable = (e) => {
@@ -705,9 +706,10 @@ export function JournalEditor({
                     };
 
                     mediaRecorder.onstop = async () => {
-                        const blob = new Blob(chunks, { type: 'audio/webm' });
-                        // Clean up stream tracks
+                        // Clean up stream tracks immediately
                         stream.getTracks().forEach(track => track.stop());
+
+                        const blob = new Blob(chunks, { type: mimeType }); // Use detected MIME type
 
                         setIsTranscribing(true);
                         try {
