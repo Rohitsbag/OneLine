@@ -15,7 +15,7 @@ interface ChatRequest {
     max_tokens?: number;
 }
 
-async function callAIProxy(body: ChatRequest): Promise<string> {
+async function callAIProxy(body: ChatRequest, signal?: AbortSignal): Promise<string> {
     const { data: { session } } = await supabase.auth.getSession();
 
     const response = await fetch(AI_PROXY_URL, {
@@ -25,6 +25,7 @@ async function callAIProxy(body: ChatRequest): Promise<string> {
             "Authorization": `Bearer ${session?.access_token || ""}`,
         },
         body: JSON.stringify(body),
+        signal: signal // Pass abort signal
     });
 
     if (!response.ok) {
@@ -36,68 +37,101 @@ async function callAIProxy(body: ChatRequest): Promise<string> {
     return data.text || "";
 }
 
-// Maximum base64 size before sending (slightly under 1MB to account for JSON overhead)
-const MAX_BASE64_SIZE = 900 * 1024; // ~900KB
+// Maximum base64 size before sending (Safety Gap: 1MB limit - 100KB overhead = 900KB)
+const MAX_BASE64_SIZE = 900 * 1024;
 
 export async function performOCR(imageFile: File): Promise<string> {
     try {
+        let fileToProcess = imageFile;
+
+        // PRE-FLIGHT: Initial Size Check & Auto-Compression
+        // We estimate base64 size (size * 1.33). If > 900KB, we compress immediately.
+        if (fileToProcess.size * 1.35 > MAX_BASE64_SIZE) {
+            console.log("Image too large for Edge Function. Auto-compressing...");
+            const { compressImage } = await import("./image");
+            // Target 600KB to be safe (results in ~800KB base64)
+            const compressedBlob = await compressImage(fileToProcess, 2048, 600);
+            fileToProcess = new File([compressedBlob], imageFile.name, { type: 'image/jpeg' });
+        }
+
         // Convert image to base64
         const base64Image = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
-            reader.readAsDataURL(imageFile);
+            reader.readAsDataURL(fileToProcess);
             reader.onload = () => resolve(reader.result as string);
             reader.onerror = error => reject(error);
         });
 
-        // SECURITY: Validate base64 size before sending
+        // FINAL SAFETY GUARD: If somehow still too big, brute-force compress again
         if (base64Image.length > MAX_BASE64_SIZE) {
-            throw new Error("Image too large. Please use a smaller image or compress it further.");
+            console.warn("Still too large after compression. Applying emergency downscale.");
+            const { compressImage } = await import("./image");
+            // Aggressive: 1024px, 400KB target
+            const emergencyBlob = await compressImage(fileToProcess, 1024, 400);
+            const emergencyFile = new File([emergencyBlob], imageFile.name, { type: 'image/jpeg' });
+
+            // Re-convert
+            const emergencyBase64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(emergencyFile);
+                reader.onload = () => resolve(reader.result as string);
+                reader.onerror = error => reject(error);
+            });
+
+            // If THIS fails, we really can't send it. But we tried everything.
+            if (emergencyBase64.length > MAX_BASE64_SIZE) {
+                throw new Error("Image could not be compressed enough to send. Please try a different image.");
+            }
+
+            // Proceed with emergency version
+            return await executeOCRCall(emergencyBase64);
         }
 
-        // 30 second timeout for OCR (longer due to vision model processing)
-        const timeoutPromise = new Promise<string>((_, reject) =>
-            setTimeout(() => reject(new Error("OCR Request Timed Out")), 30000)
-        );
+        return await executeOCRCall(base64Image);
 
-        // Helper for calling OCR with specific model
-        const callOCRModel = (model: string) => callAIProxy({
-            action: "chat",
-            model: model,
-            messages: [
-                {
-                    role: "user",
-                    content: [
-                        { type: "text", text: "Extract all text from this image. Preserve the formatting (newlines). Return ONLY the extracted text, do not add any conversational filler." },
-                        { type: "image_url", image_url: { url: base64Image } }
-                    ]
-                }
-            ],
-            temperature: 0.1,
-            max_tokens: 1000
-        });
-
-        try {
-            // TIER 1: Main (Maverick)
-            const mainPromise = callOCRModel("meta-llama/llama-4-maverick-17b-128e-instruct");
-            return await Promise.race([mainPromise, timeoutPromise]);
-        } catch (mainError) {
-            console.warn("Main OCR model failed, trying fallback...", mainError);
-
-            // TIER 2: Fallback (Scout)
-            // Reset timeout for fallback attempt
-            const fallbackTimeout = new Promise<string>((_, reject) =>
-                setTimeout(() => reject(new Error("OCR Fallback Timed Out")), 30000)
-            );
-            const fallbackPromise = callOCRModel("meta-llama/llama-4-scout-17b-16e-instruct");
-            return await Promise.race([fallbackPromise, fallbackTimeout]);
-        }
-
-    } catch (error) {
+    } catch (error: any) {
         console.error("OCR Error:", error);
-        if (error instanceof Error && (error.message === "OCR Request Timed Out" || error.message === "OCR Fallback Timed Out")) {
-            throw new Error("OCR is taking too long. Please try again with a smaller image.");
+        if (error.name === 'AbortError' || error.message === "OCR Request Timed Out") {
+            throw new Error("OCR is taking too long. Please try again with a better connection.");
         }
         throw new Error(error instanceof Error ? error.message : "Failed to extract text from image");
+    }
+}
+
+// Extracted inner logic for clean execution after compression handling
+async function executeOCRCall(base64Image: string): Promise<string> {
+    // TIMEOUT: 45 seconds strict timeout for the entire operation
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+    // Helper for calling OCR with specific model
+    const callOCRModel = (model: string) => callAIProxy({
+        action: "chat",
+        model: model,
+        messages: [
+            {
+                role: "user",
+                content: [
+                    { type: "text", text: "Extract all text from this image. Preserve the formatting (newlines). Return ONLY the extracted text, do not add any conversational filler." },
+                    { type: "image_url", image_url: { url: base64Image } }
+                ]
+            }
+        ],
+        temperature: 0.1,
+        max_tokens: 1000
+    }, controller.signal);
+
+    try {
+        // TIER 1: Main (Maverick)
+        return await callOCRModel("meta-llama/llama-4-maverick-17b-128e-instruct");
+    } catch (mainError: any) {
+        if (mainError.name === 'AbortError') throw new Error("OCR Request Timed Out");
+        console.warn("Main OCR model failed, trying fallback...", mainError);
+
+        // TIER 2: Fallback (Scout)
+        return await callOCRModel("meta-llama/llama-4-scout-17b-16e-instruct");
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
@@ -115,12 +149,11 @@ export async function transcribeAudio(audioBlob: Blob, model: string): Promise<s
             reader.onerror = error => reject(error);
         });
 
-        // 60 second timeout for transcription
-        const timeoutPromise = new Promise<string>((_, reject) =>
-            setTimeout(() => reject(new Error("Transcription Timed Out")), 60000)
-        );
+        // TIMEOUT: 45 seconds strict timeout for transcription
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-        const transcribeCall = async (): Promise<string> => {
+        try {
             const { data: { session } } = await supabase.auth.getSession();
             const response = await fetch(AI_PROXY_URL, {
                 method: "POST",
@@ -133,6 +166,7 @@ export async function transcribeAudio(audioBlob: Blob, model: string): Promise<s
                     audio: base64Audio,
                     model: model
                 }),
+                signal: controller.signal
             });
 
             if (!response.ok) {
@@ -142,12 +176,15 @@ export async function transcribeAudio(audioBlob: Blob, model: string): Promise<s
 
             const data = await response.json();
             return data.text || "";
+        } finally {
+            clearTimeout(timeoutId);
         }
 
-        return await Promise.race([transcribeCall(), timeoutPromise]);
-
-    } catch (error) {
+    } catch (error: any) {
         console.error("Transcription Error:", error);
+        if (error.name === 'AbortError') {
+            throw new Error("Transcription timed out. Please try a shorter recording.");
+        }
         throw error;
     }
 }
