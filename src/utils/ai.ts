@@ -15,26 +15,42 @@ interface ChatRequest {
     max_tokens?: number;
 }
 
-async function callAIProxy(body: ChatRequest, signal?: AbortSignal): Promise<string> {
+async function callAIProxy(body: ChatRequest, signal?: AbortSignal, retry = true): Promise<string> {
     const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token || "";
 
-    const response = await fetch(AI_PROXY_URL, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${session?.access_token || ""}`,
-        },
-        body: JSON.stringify(body),
-        signal: signal // Pass abort signal
-    });
+    const makeRequest = async (authToken: string) => {
+        const response = await fetch(AI_PROXY_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${authToken}`,
+            },
+            body: JSON.stringify(body),
+            signal: signal
+        });
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "AI request failed");
-    }
+        if (!response.ok) {
+            // Handle 401 specifically
+            if (response.status === 401 && retry) {
+                console.log("AI Proxy 401. Attempting session refresh...");
+                const { data: { session: newSession }, error: refreshError } = await supabase.auth.refreshSession();
 
-    const data = await response.json();
-    return data.text || "";
+                if (!refreshError && newSession?.access_token) {
+                    console.log("Session refreshed. Retrying request...");
+                    return callAIProxy(body, signal, false); // Retry once, no recursion
+                }
+            }
+
+            const error = await response.json().catch(() => ({ error: response.statusText }));
+            throw new Error(error.error || `AI Request Failed: ${response.status}`);
+        }
+
+        const data = await response.json();
+        return data.text || "";
+    };
+
+    return makeRequest(token);
 }
 
 // Maximum base64 size before sending (Safety Gap: 1MB limit - 100KB overhead = 900KB)
@@ -154,28 +170,45 @@ export async function transcribeAudio(audioBlob: Blob, model: string): Promise<s
         const timeoutId = setTimeout(() => controller.abort(), 45000);
 
         try {
-            const { data: { session } } = await supabase.auth.getSession();
-            const response = await fetch(AI_PROXY_URL, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${session?.access_token || ""}`,
-                },
-                body: JSON.stringify({
-                    action: "transcribe",
-                    audio: base64Audio,
-                    model: model
-                }),
-                signal: controller.signal
-            });
+            const performTranscription = async (retry = true): Promise<string> => {
+                const { data: { session } } = await supabase.auth.getSession();
+                const token = session?.access_token || "";
 
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || "Transcription failed");
-            }
+                const response = await fetch(AI_PROXY_URL, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({
+                        action: "transcribe",
+                        audio: base64Audio,
+                        model: model
+                    }),
+                    signal: controller.signal
+                });
 
-            const data = await response.json();
-            return data.text || "";
+                if (!response.ok) {
+                    if (response.status === 401 && retry) {
+                        console.log("Transcription 401. Attempting session refresh...");
+                        const { data: { session: newSession }, error: refreshError } = await supabase.auth.refreshSession();
+
+                        if (!refreshError && newSession?.access_token) {
+                            console.log("Session refreshed. Retrying transcription...");
+                            return performTranscription(false);
+                        }
+                    }
+
+                    const error = await response.json().catch(() => ({ error: response.statusText }));
+                    throw new Error(error.error || "Transcription failed");
+                }
+
+                const data = await response.json();
+                return data.text || "";
+            };
+
+            return await performTranscription();
+
         } finally {
             clearTimeout(timeoutId);
         }
