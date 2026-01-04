@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">OneLine</string>
+    <string name="title_activity_main">OneLine</string>
+    <string name="package_name">com.oneline.app</string>
+    <string name="custom_url_scheme">com.oneline.app</string>
+</resources>
