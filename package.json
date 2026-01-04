@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "apk:sync": "powershell -Command \"Copy-Item 'One Line App/android/app-release.apk' 'public/oneline.apk' -Force\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
