@@ -625,8 +625,10 @@ export function JournalEditor({
                     {hasError ? <span className="text-red-500 font-semibold">Failed to save</span> :
                         isRecording ? <span className="flex items-center gap-2 text-red-500 font-semibold animate-pulse"><span className="w-2 h-2 rounded-full bg-red-500" />Recording...</span> :
                             isLoading ? <span className="flex items-center gap-2 text-zinc-500"><span className="w-2 h-2 rounded-full bg-zinc-500 animate-pulse" />Syncing...</span> :
-                                isSaving ? <span className="text-zinc-500">Saving...</span> :
-                                    <span className="text-zinc-600">Saved</span>}
+                                isOffline ? <span className="text-orange-500 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500" />Offline (Saved locally)</span> :
+                                    pendingSync ? <span className="text-blue-500 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />Syncing...</span> :
+                                        isSaving ? <span className="text-zinc-500">Saving...</span> :
+                                            <span className="text-zinc-600">Saved</span>}
                 </div>
             </div>
 
