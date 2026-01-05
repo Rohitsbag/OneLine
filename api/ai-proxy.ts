@@ -4,12 +4,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 
-// CORS headers
-const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-};
+
 
 // Allowed models for security
 const ALLOWED_CHAT_MODELS = [
