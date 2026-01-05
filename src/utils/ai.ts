@@ -1,11 +1,12 @@
 /**
- * AI Service - Securely calls Groq API through Supabase Edge Function
- * No API keys exposed in frontend
+ * AI Service - Calls Groq API through Vercel Serverless Function
+ * API key kept secure on server side
  */
 import { supabase } from "@/utils/supabase/client";
 import { startOfWeek, endOfWeek, format } from 'date-fns';
 
-const AI_PROXY_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-proxy`;
+// Use Vercel API route instead of Supabase Edge Function
+const AI_PROXY_URL = `/api/ai-proxy`;
 
 interface ChatRequest {
     action: "chat";
@@ -16,46 +17,24 @@ interface ChatRequest {
 }
 
 async function callAIProxy(body: ChatRequest, signal?: AbortSignal): Promise<string> {
-    const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token || "";
+    // Simple fetch to Vercel API route - no auth needed, key is server-side
+    const response = await fetch(AI_PROXY_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: signal
+    });
 
-    let hasRetried = false; // Track retry state INSIDE the function
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: response.statusText }));
+        console.error("AI Proxy Error:", error);
+        throw new Error(error.error || `AI Request Failed: ${response.status}`);
+    }
 
-    const makeRequest = async (authToken: string): Promise<string> => {
-        const response = await fetch(AI_PROXY_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${authToken}`,
-            },
-            body: JSON.stringify(body),
-            signal: signal
-        });
-
-        if (!response.ok) {
-            // Handle 401 specifically - only retry ONCE
-            if (response.status === 401 && !hasRetried) {
-                hasRetried = true; // Prevent further retries
-                console.log("AI Proxy 401. Attempting session refresh...");
-                const { data: { session: newSession }, error: refreshError } = await supabase.auth.refreshSession();
-
-                if (!refreshError && newSession?.access_token) {
-                    console.log("Session refreshed. Retrying with new token...");
-                    return makeRequest(newSession.access_token);
-                } else {
-                    console.error("Session refresh failed:", refreshError?.message || "No new session");
-                }
-            }
-
-            const error = await response.json().catch(() => ({ error: response.statusText }));
-            throw new Error(error.error || `AI Request Failed: ${response.status}`);
-        }
-
-        const data = await response.json();
-        return data.text || "";
-    };
-
-    return makeRequest(token);
+    const data = await response.json();
+    return data.text || "";
 }
 
 // Maximum base64 size before compression (Edge Function accepts 4MB, we use 3.5MB for safety)
@@ -175,54 +154,28 @@ export async function transcribeAudio(audioBlob: Blob, model: string): Promise<s
         const timeoutId = setTimeout(() => controller.abort(), 45000);
 
         try {
-            let hasRetried = false; // Track retry state
+            // Simple fetch to Vercel API route - no auth needed
+            const response = await fetch(AI_PROXY_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    action: "transcribe",
+                    audio: base64Audio,
+                    model: model
+                }),
+                signal: controller.signal
+            });
 
-            const performTranscription = async (overrideToken?: string): Promise<string> => {
-                // Use override token if provided (after refresh), otherwise get from session
-                let token = overrideToken;
-                if (!token) {
-                    const { data: { session } } = await supabase.auth.getSession();
-                    token = session?.access_token || "";
-                }
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({ error: response.statusText }));
+                console.error("Transcription Error:", error);
+                throw new Error(error.error || "Transcription failed");
+            }
 
-                const response = await fetch(AI_PROXY_URL, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${token}`,
-                    },
-                    body: JSON.stringify({
-                        action: "transcribe",
-                        audio: base64Audio,
-                        model: model
-                    }),
-                    signal: controller.signal
-                });
-
-                if (!response.ok) {
-                    // Handle 401 - only retry ONCE
-                    if (response.status === 401 && !hasRetried) {
-                        hasRetried = true; // Prevent further retries
-                        console.log("Transcription 401. Attempting session refresh...");
-                        const { data: { session: newSession }, error: refreshError } = await supabase.auth.refreshSession();
-
-                        if (!refreshError && newSession?.access_token) {
-                            console.log("Session refreshed. Retrying with new token...");
-                            return performTranscription(newSession.access_token);
-                        } else {
-                            console.error("Session refresh failed:", refreshError?.message || "No new session");
-                        }
-                    }
-
-                    const error = await response.json().catch(() => ({ error: response.statusText }));
-                    throw new Error(error.error || "Transcription failed");
-                }
-
-                const data = await response.json();
-                return data.text || "";
-            };
-
-            return await performTranscription();
+            const data = await response.json();
+            return data.text || "";
 
         } finally {
             clearTimeout(timeoutId);

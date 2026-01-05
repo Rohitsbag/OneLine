@@ -92,9 +92,20 @@ serve(async (req: Request) => {
 
     // DEBUG: Log environment status
     console.log("=== AI PROXY DEBUG ===");
-    console.log("SUPABASE_URL set:", !!SUPABASE_URL);
+    console.log("SUPABASE_URL:", SUPABASE_URL ? SUPABASE_URL.substring(0, 30) + "..." : "NOT SET");
     console.log("SUPABASE_ANON_KEY set:", !!SUPABASE_ANON_KEY);
     console.log("Token length:", token.length);
+
+    // Check if env vars are set
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+        return new Response(
+            JSON.stringify({
+                error: "Server misconfigured",
+                details: `SUPABASE_URL: ${!!SUPABASE_URL}, SUPABASE_ANON_KEY: ${!!SUPABASE_ANON_KEY}`
+            }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+    }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         global: { headers: { Authorization: `Bearer ${token}` } }
@@ -108,7 +119,15 @@ serve(async (req: Request) => {
 
     if (authError || !user) {
         return new Response(
-            JSON.stringify({ error: "Invalid or expired token", details: authError?.message }),
+            JSON.stringify({
+                error: "Invalid or expired token",
+                details: authError?.message || "No user returned",
+                debug: {
+                    supabaseUrlSet: !!SUPABASE_URL,
+                    anonKeySet: !!SUPABASE_ANON_KEY,
+                    tokenLength: token.length
+                }
+            }),
             { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
     }
