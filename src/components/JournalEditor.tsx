@@ -494,6 +494,48 @@ export function JournalEditor({
         }
     }, [currentDate, userId]);
 
+    // === REAL-TIME SYNC ===
+    useEffect(() => {
+        if (!userId) return;
+
+        const dateStr = format(currentDate, 'yyyy-MM-dd');
+
+        // Unique channel per user to listen for all their updates
+        // Actually unique channel per mount prevents collisions.
+        const channel = supabase
+            .channel(`journal-${userId}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: '*', // Listen for INSERT and UPDATE
+                    schema: 'public',
+                    table: 'entries',
+                    filter: `user_id=eq.${userId}`
+                },
+                (payload) => {
+                    const newData = payload.new as any;
+
+                    // 1. Check if the event is for the CURRENT date
+                    if (newData && newData.date === dateStr) {
+                        // 2. Check if local state is dirty (User is typing)
+                        if (isDirtyRef.current) {
+                            // User has unsaved changes. Do NOT overwrite.
+                            showToast("New changes from cloud available. Reload page to see them.", "info");
+                        } else {
+                            // 3. Auto-Update (Safe)
+                            console.log("Real-time update received. Syncing...");
+                            fetchEntry();
+                        }
+                    }
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [userId, currentDate, fetchEntry, showToast]);
+
     // VISIBILITY CHANGE & FOCUS HANDLER
     // Refresh signed URLs when app comes to foreground, but debounce heavily
     useEffect(() => {
