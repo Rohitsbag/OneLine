@@ -39,7 +39,21 @@ function checkRateLimit(userId: string): boolean {
 }
 
 // === SECURITY: Payload size validation ===
-const MAX_PAYLOAD_SIZE_BYTES = 1024 * 1024; // 1MB
+// GROQ allows 4MB for base64 images, so we match that limit
+const MAX_PAYLOAD_SIZE_BYTES = 4 * 1024 * 1024; // 4MB (GROQ's limit)
+const MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024; // 25MB for audio (Whisper limit)
+
+// Helper: Fetch with timeout
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 45000): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        return response;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
 
 interface RequestBody {
     action: "chat" | "transcribe";
@@ -112,7 +126,7 @@ serve(async (req: Request) => {
         const contentLength = req.headers.get("Content-Length");
         if (contentLength && parseInt(contentLength) > MAX_PAYLOAD_SIZE_BYTES) {
             return new Response(
-                JSON.stringify({ error: "Payload too large. Maximum size is 1MB." }),
+                JSON.stringify({ error: "Payload too large. Maximum size is 4MB." }),
                 { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
         }
@@ -120,7 +134,7 @@ serve(async (req: Request) => {
         const bodyText = await req.text();
         if (bodyText.length > MAX_PAYLOAD_SIZE_BYTES) {
             return new Response(
-                JSON.stringify({ error: "Payload too large. Maximum size is 1MB." }),
+                JSON.stringify({ error: "Payload too large. Maximum size is 4MB." }),
                 { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
         }
@@ -131,7 +145,6 @@ serve(async (req: Request) => {
             // Chat Completions
             const allowedModels = [
                 "llama-3.3-70b-versatile",
-                "llama-3.2-11b-vision-preview",
                 "meta-llama/llama-4-maverick-17b-128e-instruct",
                 "meta-llama/llama-4-scout-17b-16e-instruct"
             ];
@@ -142,7 +155,7 @@ serve(async (req: Request) => {
             // Safety check: ensure requested model is in our allowlist
             const modelToUse = allowedModels.includes(requestedModel) ? requestedModel : "llama-3.3-70b-versatile";
 
-            const response = await fetch(`${GROQ_BASE_URL}/chat/completions`, {
+            const response = await fetchWithTimeout(`${GROQ_BASE_URL}/chat/completions`, {
                 method: "POST",
                 headers: {
                     "Authorization": `Bearer ${GROQ_API_KEY}`,
@@ -154,7 +167,7 @@ serve(async (req: Request) => {
                     temperature: body.temperature ?? 0.7,
                     max_tokens: body.max_tokens ?? 300,
                 }),
-            });
+            }, 45000);
 
             const data = await response.json();
 
@@ -181,6 +194,15 @@ serve(async (req: Request) => {
 
             // Decode base64 audio
             const audioBytes = Uint8Array.from(atob(body.audio), c => c.charCodeAt(0));
+
+            // GUARD: Check audio size (max 25MB for Whisper)
+            if (audioBytes.length > MAX_AUDIO_SIZE_BYTES) {
+                return new Response(
+                    JSON.stringify({ error: `Audio too large. Maximum size is 25MB. Your file is ${(audioBytes.length / (1024 * 1024)).toFixed(1)}MB.` }),
+                    { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                );
+            }
+
             // Whisper API expects 'file' part. Blob type is important.
             const audioBlob = new Blob([audioBytes], { type: "audio/webm" });
 
@@ -195,14 +217,13 @@ serve(async (req: Request) => {
                 formData.append("model", model);
                 // formData.append("response_format", "text"); // JSON is better for error handling
 
-                const response = await fetch(`${GROQ_BASE_URL}/audio/transcriptions`, {
+                const response = await fetchWithTimeout(`${GROQ_BASE_URL}/audio/transcriptions`, {
                     method: "POST",
                     headers: {
                         "Authorization": `Bearer ${GROQ_API_KEY}`,
-                        // Content-Type is multipart/form-data, fetch sets boundary automatically
                     },
                     body: formData,
-                });
+                }, 60000); // 60s timeout for audio transcription
 
                 const data = await response.json();
 

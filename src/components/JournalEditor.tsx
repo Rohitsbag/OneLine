@@ -634,10 +634,20 @@ export function JournalEditor({
             const { detectNetworkTier, getSTTModel } = await import("@/utils/stt-tiered");
             let tier = detectNetworkTier();
 
-            // RELAXED SECURITY: Trust ai.ts to handle 401/Refresh
-            // We only force offline if there is NO network.
-            // If the key is expired, ai.ts will auto-refresh it.
-
+            // SMART FALLBACK: If nominally online, do a quick API health check
+            // If API is broken (e.g., auth issues), fall back to offline mode proactively
+            if (tier !== "offline") {
+                try {
+                    const { data: { session } } = await supabase.auth.getSession();
+                    if (!session?.access_token) {
+                        console.log("No session - using offline STT mode");
+                        tier = "offline";
+                    }
+                } catch (e) {
+                    console.log("Auth check failed - using offline STT mode");
+                    tier = "offline";
+                }
+            }
 
             if (tier === "offline") {
                 // === OFFLINE MODE: Web Speech API ===
@@ -789,8 +799,21 @@ export function JournalEditor({
         const file = e.target.files[0];
         e.target.value = "";
 
+        // VALIDATION: Supported image types
+        const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/bmp'];
         if (!file.type.startsWith('image/')) {
-            alert("Please select an image file.");
+            alert("❌ Please select an image file.\n\nSupported formats: JPG, PNG, GIF, WebP, HEIC, BMP");
+            return;
+        }
+        if (!supportedTypes.includes(file.type) && !file.type.startsWith('image/')) {
+            alert(`❌ Unsupported image format: ${file.type}\n\nSupported formats: JPG, PNG, GIF, WebP, HEIC, BMP`);
+            return;
+        }
+
+        // VALIDATION: Image size limit (50MB max for processing)
+        const MAX_IMAGE_SIZE_MB = 50;
+        if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
+            alert(`❌ Image too large!\n\nYour image: ${(file.size / (1024 * 1024)).toFixed(1)}MB\nMaximum size: ${MAX_IMAGE_SIZE_MB}MB\n\nPlease use a smaller image or compress it first.`);
             return;
         }
 

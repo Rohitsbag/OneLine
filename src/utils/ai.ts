@@ -58,20 +58,20 @@ async function callAIProxy(body: ChatRequest, signal?: AbortSignal): Promise<str
     return makeRequest(token);
 }
 
-// Maximum base64 size before sending (Safety Gap: 1MB limit - 100KB overhead = 900KB)
-const MAX_BASE64_SIZE = 900 * 1024;
+// Maximum base64 size before compression (Edge Function accepts 4MB, we use 3.5MB for safety)
+const MAX_BASE64_SIZE = 3.5 * 1024 * 1024; // 3.5MB (leaves room for overhead)
 
 export async function performOCR(imageFile: File): Promise<string> {
     try {
         let fileToProcess = imageFile;
 
         // PRE-FLIGHT: Initial Size Check & Auto-Compression
-        // We estimate base64 size (size * 1.33). If > 900KB, we compress immediately.
+        // We estimate base64 size (size * 1.33). If > 3.5MB, we compress.
         if (fileToProcess.size * 1.35 > MAX_BASE64_SIZE) {
-            console.log("Image too large for Edge Function. Auto-compressing...");
+            console.log("Image large. Compressing for Edge Function...");
             const { compressImage } = await import("./image");
-            // Target 600KB to be safe (results in ~800KB base64)
-            const compressedBlob = await compressImage(fileToProcess, 2048, 600);
+            // Target 2.5MB to stay under 3.5MB base64 with room
+            const compressedBlob = await compressImage(fileToProcess, 3000, 2500);
             fileToProcess = new File([compressedBlob], imageFile.name, { type: 'image/jpeg' });
         }
 
