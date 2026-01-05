@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Mic, Camera, X, Square, AudioLines } from "lucide-react";
+import { ChevronLeft, ChevronRight, Mic, Camera, X, Square, AudioLines, ScanText } from "lucide-react";
 import { format, addDays, subDays, isSameDay } from "date-fns";
 import { supabase } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
@@ -8,6 +8,46 @@ import { AudioPlayer } from "./AudioPlayer";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { performOCR } from "@/utils/ai";
 import { useToast } from "./Toast";
+import { JOURNAL_CONFIG } from "@/constants/journal";
+
+// Fix Types for SpeechRecognition
+interface SpeechRecognitionEvent extends Event {
+    readonly results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognitionResultList {
+    readonly length: number;
+    [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+    readonly isFinal: boolean;
+    [index: number]: SpeechRecognitionAlternative;
+}
+
+interface SpeechRecognitionAlternative {
+    readonly transcript: string;
+}
+
+interface SpeechRecognition extends EventTarget {
+    continuous: boolean;
+    interimResults: boolean;
+    lang: string;
+    start(): void;
+    stop(): void;
+    abort(): void;
+    onstart: ((this: SpeechRecognition, ev: Event) => void) | null;
+    onend: ((this: SpeechRecognition, ev: Event) => void) | null;
+    onerror: ((this: SpeechRecognition, ev: any) => void) | null;
+    onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void) | null;
+}
+
+declare global {
+    interface Window {
+        SpeechRecognition?: { new(): SpeechRecognition };
+        webkitSpeechRecognition?: { new(): SpeechRecognition };
+    }
+}
 
 interface JournalEditorProps {
     date: Date;
@@ -18,6 +58,52 @@ interface JournalEditorProps {
     onGuestAction?: () => void;
     refreshTrigger?: number;
 }
+
+// SECURITY: Magic Number Validation to prevent spoofed extensions
+const validateImageFile = async (file: File): Promise<boolean> => {
+    const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif', 'image/bmp'];
+
+    // First check MIME type
+    if (!supportedTypes.includes(file.type) && !file.type.startsWith('image/')) {
+        return false;
+    }
+
+    try {
+        const buffer = await file.slice(0, 16).arrayBuffer(); // Extended to 16 bytes
+        const bytes = new Uint8Array(buffer);
+
+        const signatures: Record<string, (bytes: Uint8Array) => boolean> = {
+            'image/jpeg': (b) => b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF,
+            'image/png': (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47,
+            'image/gif': (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38,
+            'image/bmp': (b) => b[0] === 0x42 && b[1] === 0x4D,
+            'image/webp': (b) => {
+                // RIFF header + WEBP identifier
+                return b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+                    b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50;
+            },
+            'image/heic': (b) => {
+                // HEIC uses ftyp box - check for 'ftyp' at offset 4
+                return b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70;
+            },
+            'image/heif': (b) => {
+                return b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70;
+            },
+        };
+
+        const validator = signatures[file.type];
+        if (validator) {
+            return validator(bytes);
+        }
+
+        // For unknown image types, trust MIME if it starts with image/
+        return file.type.startsWith('image/');
+
+    } catch (e) {
+        console.error("Magic number check failed", e);
+        return false;
+    }
+};
 
 export function JournalEditor({
     date,
@@ -42,7 +128,7 @@ export function JournalEditor({
 
     const [userId, setUserId] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const recognitionRef = useRef<any>(null);
+
 
     // Voice Note State
     const [audioPath, setAudioPath] = useState<string | null>(null);
@@ -50,6 +136,8 @@ export function JournalEditor({
     const [isRecordingAudio, setIsRecordingAudio] = useState(false);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
+    const [imageLoadError, setImageLoadError] = useState(false); // NEW: Handle broken images
+    const recognitionRef = useRef<SpeechRecognition | null>(null); // Type safety fix
 
     // Media Menu State
     const [showMicMenu, setShowMicMenu] = useState(false);
@@ -61,6 +149,31 @@ export function JournalEditor({
     const [isProcessingOCR, setIsProcessingOCR] = useState(false);
     const ocrFileInputRef = useRef<HTMLInputElement>(null);
 
+    // === HARDENING REFS ===
+    // 1. AbortController for fetching entries (prevent race conditions)
+    const abortControllerRef = useRef<AbortController | null>(null);
+    // 2. Track active Blob URL for immediate cleanup (prevents leaks in rapid DnD)
+    const activeBlobUrlRef = useRef<string | null>(null);
+    // 3. Track valid MIME type for Audio Recorder
+    const mimeTypeRef = useRef<string>('audio/webm');
+    // 4. Manual abort for OCR
+    const ocrAbortControllerRef = useRef<AbortController | null>(null);
+    // 5. Last Refresh Time (Visibility Debounce)
+    const lastRefreshTimeRef = useRef<number>(0);
+
+
+    // 2. Refs for cleanup (Fix Stale Closure in useEffect)
+    const contentRef = useRef(content);
+    const imagePathRef = useRef(imagePath);
+    const audioPathRef = useRef(audioPath);
+
+    // Sync refs with state
+    useEffect(() => {
+        contentRef.current = content;
+        imagePathRef.current = imagePath;
+        audioPathRef.current = audioPath;
+    }, [content, imagePath, audioPath]);
+
     // === BUG FIX REFS ===
     // Prevents data loss on fast navigation - tracks if content needs saving
     const isDirtyRef = useRef(false);
@@ -71,6 +184,10 @@ export function JournalEditor({
     // Recording timer state
     const [recordingDuration, setRecordingDuration] = useState(0);
     const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // ROOT CAUSE FIX: Tracks which date the CURRENT 'content' state belongs to.
+    // This prevents Today's content from being saved into Yesterday's slot during transitions.
+    const contentDateRef = useRef(format(date, 'yyyy-MM-dd'));
 
     // Toast/Confirm UI (replaces native alert/confirm)
     const { showToast, showConfirm } = useToast();
@@ -122,6 +239,12 @@ export function JournalEditor({
         return () => {
             isMountedRef.current = false;
             document.removeEventListener("mousedown", handleClickOutside);
+
+            // PRIVACY GUARD: Stop microphone tracks even if recording failed or unmounted
+            if (mediaRecorderRef.current?.stream) {
+                mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+            }
+
             // Stop SpeechRecognition if active
             if (recognitionRef.current) {
                 try {
@@ -137,40 +260,46 @@ export function JournalEditor({
             if (recordingTimerRef.current) {
                 clearInterval(recordingTimerRef.current);
             }
-        };
-    }, []);
 
-    // Offline / Online Listener
+            // Cleanup active blob URL on unmount
+            if (activeBlobUrlRef.current) {
+                URL.revokeObjectURL(activeBlobUrlRef.current);
+            }
+
+            // NEW: Cancel any in-progress OCR
+            if (ocrAbortControllerRef.current) {
+                ocrAbortControllerRef.current.abort();
+                ocrAbortControllerRef.current = null;
+            }
+
+            // NEW: Cancel any in-progress fetch (Double safety)
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+                abortControllerRef.current = null;
+            }
+
+        };
+    }, []); // Run ONCE on mount/unmount
+
+    // Separate effect for URL cleanup avoids re-running global cleanup
     useEffect(() => {
-        const handleOnline = () => {
-            setIsOffline(false);
-            syncPendingData();
-        };
-        const handleOffline = () => setIsOffline(true);
-
-        window.addEventListener('online', handleOnline);
-        window.addEventListener('offline', handleOffline);
-
         return () => {
-            window.removeEventListener('online', handleOnline);
-            window.removeEventListener('offline', handleOffline);
+            // MEMORY LEAK FIX: Revoke any lingering blob URLs
+            if (displayUrl && displayUrl.startsWith('blob:')) {
+                URL.revokeObjectURL(displayUrl);
+            }
         };
-    }, [userId]);
+    }, [displayUrl]);
 
-    useEffect(() => {
-        if (refreshTrigger > 0) {
-            syncPendingData();
-        }
-    }, [refreshTrigger, userId]);
-
-    const syncPendingData = async () => {
+    const syncPendingData = useCallback(async () => {
         const pendingRaw = localStorage.getItem('pending_journal_sync');
         if (!pendingRaw || !userId) return;
 
         setPendingSync(true);
         try {
             const pendingEntries = JSON.parse(pendingRaw) as Record<string, { content: string; image_url?: string; audio_url?: string; updated_at?: string }>;
-            const dates = Object.keys(pendingEntries);
+            // CHRONOLOGICAL SYNC: Sort dates to prevent older data from overwriting newer entries
+            const dates = Object.keys(pendingEntries).sort();
 
             for (const dateKey of dates) {
                 const entry = pendingEntries[dateKey];
@@ -228,11 +357,42 @@ export function JournalEditor({
                 setPendingSync(false);
             }
         }
-    };
+    }, [userId]);
+
+    // Offline / Online Listener
+    useEffect(() => {
+        const handleOnline = () => {
+            setIsOffline(false);
+            syncPendingData();
+        };
+        const handleOffline = () => setIsOffline(true);
+
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, [userId, syncPendingData]);
+
+    useEffect(() => {
+        if (refreshTrigger > 0) {
+            syncPendingData();
+        }
+    }, [refreshTrigger, userId, syncPendingData]);
+
+
 
     // Fetch Entry (OFFLINE-FIRST)
     const fetchEntry = useCallback(async () => {
         if (!userId) return;
+
+        // Cancel any in-flight request to prevent race conditions
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+        abortControllerRef.current = new AbortController();
 
         const dateStr = format(currentDate, 'yyyy-MM-dd');
         const cacheKey = `entry_cache_${userId}_${dateStr}`;
@@ -245,8 +405,11 @@ export function JournalEditor({
             setDisplayUrl(null);
             setAudioDisplayUrl(null);
             setIsLoading(true);
+            setImageLoadError(false); // Reset error state on date change
             // CRITICAL: Reset dirty flag for the new date
             isDirtyRef.current = false;
+            // Also reset the lock so no saves happen until data is loaded
+            contentDateRef.current = "";
         }
 
         // STEP 1: Load from localStorage cache first (instant)
@@ -257,9 +420,13 @@ export function JournalEditor({
                 setContent(cached.content || "");
                 setImagePath(cached.image_url || null);
                 setAudioPath(cached.audio_url || null);
+                // LOCK NOW: Allow saving immediate edits to the cached content
+                contentDateRef.current = dateStr;
             }
+        } else if (isMountedRef.current) {
+            // No cache entry? It's a fresh day, so allow saving immediately
+            contentDateRef.current = dateStr;
         }
-        // No else needed here as we already reset to empty in STEP 0
 
         // STEP 2: Try to fetch from server (if online)
         try {
@@ -268,11 +435,22 @@ export function JournalEditor({
                 .select('content, image_url, audio_url, updated_at')
                 .eq('user_id', userId)
                 .eq('date', dateStr)
+                .abortSignal(abortControllerRef.current.signal)
                 .single();
 
             if (error && error.code !== 'PGRST116') {
+                // If aborted, check multiple patterns
+                const isAborted =
+                    error.name === 'AbortError' ||
+                    error.code === 'ABORT_ERR' ||
+                    error.code === '20' || // DOMException abort code
+                    error.message?.toLowerCase().includes('abort') ||
+                    error.message?.toLowerCase().includes('cancel');
+
+                if (isAborted) return;
+
                 // Network error or other - we already have cache data
-                console.log('Server fetch failed, using cached data');
+                console.log('Server fetch failed, using cached data:', error.message);
             } else if (data && isMountedRef.current) {
                 // Update cache with server data
                 localStorage.setItem(cacheKey, JSON.stringify(data));
@@ -284,6 +462,11 @@ export function JournalEditor({
                     setImagePath(data.image_url || null);
                     setAudioPath(data.audio_url || null);
                 }
+                // Update the lock to allow saving for THIS date now
+                contentDateRef.current = dateStr;
+            } else if (!data && isMountedRef.current) {
+                // If no entry exists on server, it's a fresh day
+                contentDateRef.current = dateStr;
             }
         } catch (error) {
             // Offline - already using cached data
@@ -292,8 +475,37 @@ export function JournalEditor({
 
         if (isMountedRef.current) {
             setIsLoading(false);
+            // CRITICAL: Unconditionally unlock saving for this date once UI is ready
+            contentDateRef.current = dateStr;
         }
     }, [currentDate, userId]);
+
+    // VISIBILITY CHANGE & FOCUS HANDLER
+    // Refresh signed URLs when app comes to foreground, but debounce heavily
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            if (!document.hidden && userId) {
+                const now = Date.now();
+                if (now - lastRefreshTimeRef.current < JOURNAL_CONFIG.VISIBILITY_REFRESH_DEBOUNCE_MS) {
+                    console.log("Skipping refresh - too recent");
+                    return;
+                }
+
+                lastRefreshTimeRef.current = now;
+                console.log("App visible - refreshing entry");
+                fetchEntry();
+            }
+        };
+
+        window.addEventListener('visibilitychange', handleVisibilityChange);
+        // 'focus' often fires with visibilitychange, so simplified to just visibilitychange for mobile/tab switching reliability
+        // window.addEventListener('focus', handleVisibilityChange); 
+
+        return () => {
+            window.removeEventListener('visibilitychange', handleVisibilityChange);
+            // window.removeEventListener('focus', handleVisibilityChange);
+        };
+    }, [userId, fetchEntry]);
 
     useEffect(() => {
         fetchEntry();
@@ -311,17 +523,45 @@ export function JournalEditor({
                 if (isMountedRef.current && !cancelled) setDisplayUrl(imagePath);
                 return;
             }
-            const { data } = await supabase.storage
+
+            const { data, error } = await supabase.storage
                 .from('journal-media-private')
-                .createSignedUrl(imagePath, 3600 * 24);
+                .createSignedUrl(imagePath, JOURNAL_CONFIG.SIGNED_URL_EXPIRY_SECONDS);
+
+            if (error) {
+                console.warn("Failed to create signed URL:", error.message);
+            }
 
             if (data?.signedUrl && isMountedRef.current && !cancelled) {
                 setDisplayUrl(data.signedUrl);
+            } else if (isMountedRef.current && !cancelled) {
+                // Handle case where signing fails
+                console.warn("Signed URL creation failed for path:", imagePath);
+                setImageLoadError(true);
             }
         };
         loadSignedUrl();
         return () => { cancelled = true; };
     }, [imagePath]);
+
+    // NEW: Targeted retry for image loading (Polish)
+    const refreshImageUrl = useCallback(async () => {
+        if (!imagePath || imagePath.startsWith('http')) return;
+
+        setImageLoadError(false);
+        // Optimistically clear error while processing
+
+        const { data } = await supabase.storage
+            .from('journal-media-private')
+            .createSignedUrl(imagePath, JOURNAL_CONFIG.SIGNED_URL_EXPIRY_SECONDS);
+
+        if (data?.signedUrl && isMountedRef.current) {
+            setDisplayUrl(data.signedUrl);
+        } else if (isMountedRef.current) {
+            setImageLoadError(true);
+            showToast("Failed to reload image", "error");
+        }
+    }, [imagePath, showToast]);
 
     // Audio Signed URL
     useEffect(() => {
@@ -335,9 +575,10 @@ export function JournalEditor({
                 if (isMountedRef.current && !cancelled) setAudioDisplayUrl(audioPath);
                 return;
             }
+
             const { data } = await supabase.storage
                 .from('journal-media-private')
-                .createSignedUrl(audioPath, 3600 * 24);
+                .createSignedUrl(audioPath, JOURNAL_CONFIG.SIGNED_URL_EXPIRY_SECONDS);
 
             if (data?.signedUrl && isMountedRef.current && !cancelled) {
                 setAudioDisplayUrl(data.signedUrl);
@@ -351,6 +592,40 @@ export function JournalEditor({
     const saveEntry = useCallback(async (dateStr: string, currentContent: string, currentImagePath: string | null, currentAudioPath: string | null) => {
         if (!userId) return;
 
+        // Helper to safe-set localStorage (Quota Handling with LRU)
+        const safeSetItem = (key: string, value: string) => {
+            try {
+                localStorage.setItem(key, value);
+            } catch (e: any) {
+                if (e.name === 'QuotaExceededError') {
+                    console.warn("LocalStorage full, cleaning up oldest entries...");
+                    try {
+                        // Smart Cleanup: Sort by updated_at to remove ONLY the oldest
+                        const items = Object.keys(localStorage)
+                            .filter(k => k.startsWith('entry_cache_'))
+                            .map(k => {
+                                try {
+                                    const val = JSON.parse(localStorage.getItem(k) || '{}');
+                                    return { key: k, time: val.updated_at ? new Date(val.updated_at).getTime() : 0 };
+                                } catch {
+                                    return { key: k, time: 0 };
+                                }
+                            })
+                            .sort((a, b) => a.time - b.time); // Oldest first
+
+                        // Remove oldest 20% or at least 5
+                        const countToRemove = Math.max(5, Math.floor(items.length * 0.2));
+                        items.slice(0, countToRemove).forEach(item => localStorage.removeItem(item.key));
+
+                        // Retry set
+                        localStorage.setItem(key, value);
+                    } catch (retryE) {
+                        console.error("Cache write failed even after cleanup", retryE);
+                    }
+                }
+            }
+        };
+
         // OFFLINE-FIRST: Always update local cache first
         const cacheKey = `entry_cache_${userId}_${dateStr}`;
         const cacheData = {
@@ -359,7 +634,7 @@ export function JournalEditor({
             audio_url: currentAudioPath,
             updated_at: new Date().toISOString()
         };
-        localStorage.setItem(cacheKey, JSON.stringify(cacheData));
+        safeSetItem(cacheKey, JSON.stringify(cacheData));
 
         // Helper to save to pending sync queue (for server sync)
         const saveOffline = () => {
@@ -371,7 +646,7 @@ export function JournalEditor({
                 audio_url: currentAudioPath,
                 updated_at: cacheData.updated_at
             };
-            localStorage.setItem('pending_journal_sync', JSON.stringify(existing));
+            safeSetItem('pending_journal_sync', JSON.stringify(existing));
         };
 
         if (!navigator.onLine) {
@@ -423,6 +698,13 @@ export function JournalEditor({
         if (!userId || isLoading) return;
         const dateStr = format(currentDate, 'yyyy-MM-dd');
 
+        // ROOT CAUSE GUARD: Block save if the content in state doesn't match the date we're on
+        // This stops the "Today's text saving to Yesterday" bug during fast navigation.
+        if (contentDateRef.current !== dateStr) {
+            console.log("Save blocked: Date mismatch during transition");
+            return;
+        }
+
         isDirtyRef.current = true;
         // Immediate Feedback: Show saving pulse as soon as typing starts
         if (isMountedRef.current) setIsSaving(true);
@@ -433,9 +715,9 @@ export function JournalEditor({
 
         return () => {
             clearTimeout(timeoutId);
-            // CRITICAL: Flush save immediately on cleanup if dirty
-            if (isDirtyRef.current && userId) {
-                saveEntry(dateStr, content, imagePath, audioPath);
+            // CRITICAL (STALE CLOSURE FIX): Use Refs to ensure we save the LATEST text during cleanup
+            if (isDirtyRef.current && userId && contentDateRef.current === dateStr) {
+                saveEntry(dateStr, contentRef.current, imagePathRef.current, audioPathRef.current);
             }
         };
     }, [content, imagePath, audioPath, currentDate, userId, isLoading, saveEntry]);
@@ -455,20 +737,41 @@ export function JournalEditor({
     }, [content, adjustTextareaHeight]);
 
     // --- File Handlers ---
-    const processFile = async (file: File) => {
+    const processFile = useCallback(async (file: File) => {
         if (!userId) return;
 
-        // MEMORY LEAK: Revoke previous object URL if exists
-        if (displayUrl) {
-            URL.revokeObjectURL(displayUrl);
+        if (!(await validateImageFile(file))) {
+            showToast("Invalid image file. Please upload a valid image (JPEG, PNG, WebP, HEIC).", "error");
+            return;
+        }
+
+        // Size Check (Original)
+        if (file.size > JOURNAL_CONFIG.MAX_RAW_IMAGE_SIZE_MB * 1024 * 1024) {
+            showToast(`Image too large! Max: ${JOURNAL_CONFIG.MAX_RAW_IMAGE_SIZE_MB}MB`, "error");
+            return;
+        }
+
+        if (activeBlobUrlRef.current) {
+            URL.revokeObjectURL(activeBlobUrlRef.current);
         }
 
         setIsUploading(true);
+        // Optimistic preview
         const objectUrl = URL.createObjectURL(file);
+        activeBlobUrlRef.current = objectUrl;
         setDisplayUrl(objectUrl);
 
         try {
-            const compressedBlob = await compressImage(file);
+            const compressedBlob = await compressImage(file, JOURNAL_CONFIG.IMAGE_UPLOAD_QUALITY, JOURNAL_CONFIG.IMAGE_UPLOAD_MAX_SIZE);
+
+            // COMPRESSION VALIDATION
+            if (!compressedBlob || compressedBlob.size === 0) {
+                throw new Error("Compression failed (empty result).");
+            }
+            if (compressedBlob.size > JOURNAL_CONFIG.MAX_COMPRESSED_IMAGE_SIZE_MB * 1024 * 1024) {
+                throw new Error("Image too complex. Please use a smaller image.");
+            }
+
             const fileName = `${userId}/${Date.now()}-${file.name.split('.')[0]}.webp`;
             const compressedFile = new File([compressedBlob], fileName, { type: 'image/webp' });
 
@@ -483,10 +786,10 @@ export function JournalEditor({
                 setImagePath(fileName);
             }
 
-        } catch (error) {
+        } catch (error: any) {
             console.error("Image upload failed:", error);
             if (isMountedRef.current) {
-                showToast("Failed to upload image.", "error");
+                showToast(error.message || "Failed to upload image.", "error");
                 setDisplayUrl(null);
                 setImagePath(null);
             }
@@ -495,7 +798,7 @@ export function JournalEditor({
                 setIsUploading(false);
             }
         }
-    };
+    }, [userId]);
 
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
@@ -515,15 +818,53 @@ export function JournalEditor({
         });
         if (!confirmed) return;
 
-        const pathToDelete = imagePath;
+        // ROLLBACK STATE
+        const previousPath = imagePath;
+        const previousUrl = displayUrl;
+
+        // Optimistic UI update
         setImagePath(null);
         setDisplayUrl(null);
 
-        await supabase.storage.from('journal-media-private').remove([pathToDelete]);
+        try {
+            // STRATEGY: Update Database FIRST.
+            // If DB update fails, we can rollback UI and nothing is lost.
+            // If DB update succeeds but Storage delete fails, we just have an orphaned file (acceptable).
 
-        // Force update DB immediately for better UX
-        const dateStr = format(currentDate, 'yyyy-MM-dd');
-        await supabase.from('entries').update({ image_url: null }).eq('user_id', userId).eq('date', dateStr);
+            const dateStr = format(currentDate, 'yyyy-MM-dd');
+            const { error: dbError } = await supabase
+                .from('entries')
+                .update({ image_url: null, updated_at: new Date().toISOString() })
+                .eq('user_id', userId)
+                .eq('date', dateStr);
+
+            if (dbError) throw dbError;
+
+            // Now delete from storage
+            const { error: storageError } = await supabase.storage
+                .from('journal-media-private')
+                .remove([previousPath]);
+
+            if (storageError) {
+                console.warn("Storage deletion failed (orphaned file):", storageError);
+            }
+
+            // Clean local cache properly
+            const cacheKey = `entry_cache_${userId}_${dateStr}`;
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) {
+                const data = JSON.parse(cached);
+                data.image_url = null;
+                localStorage.setItem(cacheKey, JSON.stringify(data));
+            }
+
+        } catch (error) {
+            console.error("Failed to delete image:", error);
+            // Rollback Logic
+            setImagePath(previousPath);
+            setDisplayUrl(previousUrl);
+            showToast("Failed to delete image. Please try again.", "error");
+        }
     };
 
     // --- Audio Logic ---
@@ -531,6 +872,17 @@ export function JournalEditor({
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             showToast("Audio recording not supported.", "error");
             return;
+        }
+
+        // PRE-FLIGHT CHECK: Network
+        if (!navigator.onLine) {
+            const confirmed = await showConfirm({
+                title: "You're Offline",
+                message: "Voice notes recorded offline will be saved locally but cannot be uploaded until you're back online.",
+                confirmText: "Record Anyway",
+                cancelText: "Cancel"
+            });
+            if (!confirmed) return;
         }
 
         try {
@@ -546,8 +898,11 @@ export function JournalEditor({
                 } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
                     mimeType = 'audio/ogg';
                 }
-                // If none supported, let browser use default
+                // If none supported, let browser use default (but may fail on iOS if we force webm later)
             }
+
+            // SAFARI FIX: Use the negotiated mime type
+            mimeTypeRef.current = mimeType;
 
             const mediaRecorder = new MediaRecorder(stream, { mimeType });
             mediaRecorderRef.current = mediaRecorder;
@@ -569,8 +924,13 @@ export function JournalEditor({
                     setRecordingDuration(0);
                 }
 
-                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-                const fileName = `${userId}/audio-${Date.now()}.webm`;
+                // SAFARI FIX: Create blob with the correct MIME type
+                const audioBlob = new Blob(audioChunksRef.current, { type: mimeTypeRef.current });
+
+                // Extension handling
+                const type = mimeTypeRef.current;
+                const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm';
+                const fileName = `${userId}/audio-${Date.now()}.${ext}`;
 
                 const { error } = await supabase.storage
                     .from('journal-media-private')
@@ -583,14 +943,42 @@ export function JournalEditor({
                         setHasError(true);
                     }
                 } else {
-                    // Optimized: If an audio file already exists, delete it to keep "one voice note" rule clean
-                    // We do this AFTER successful upload to prevent data loss if upload fails
-                    if (audioPath) {
-                        await supabase.storage.from('journal-media-private').remove([audioPath]);
-                    }
+                    const oldAudioPath = audioPathRef.current;
+
+                    // CRITICAL FIX: Update State FIRST.
+                    // This immediately triggers the debounced 'saveEntry' effect which handles the upsert cleanly.
                     if (isMountedRef.current) {
                         setAudioPath(fileName);
                         setHasError(false);
+                    }
+
+                    // RACE CONDITION PREVENTION:
+                    // 1. We do NOT upsert here manualy to avoid conflict with the debounced saver.
+                    // 2. We delay the deletion of the OLD file slightly to ensure the new state persists 
+                    //    and the 'saveEntry' effect has captured the new 'fileName'.
+
+                    if (oldAudioPath) {
+                        // VERIFY DB UPDATE BEFORE DELETE
+                        setTimeout(async () => {
+                            try {
+                                const { data: entry } = await supabase
+                                    .from('entries')
+                                    .select('audio_url')
+                                    .eq('user_id', userId)
+                                    .eq('date', format(currentDate, 'yyyy-MM-dd'))
+                                    .single();
+
+                                // Only delete if DB confirms new file is saved (audio_url matches new fileName)
+                                if (entry?.audio_url === fileName) {
+                                    await supabase.storage.from('journal-media-private').remove([oldAudioPath]);
+                                    console.log("Old audio file safely deleted.");
+                                } else {
+                                    console.warn("Skipped old audio deletion - DB state mismatch.");
+                                }
+                            } catch (e) {
+                                console.error("Failed to cleanup old audio file:", e);
+                            }
+                        }, JOURNAL_CONFIG.AUDIO_DELETE_DELAY_MS);
                     }
                 }
 
@@ -600,11 +988,19 @@ export function JournalEditor({
             mediaRecorder.start();
             setIsRecordingAudio(true);
 
-            // Start recording timer
+            // Start recording timer with LIMIT check
             setRecordingDuration(0);
             recordingTimerRef.current = setInterval(() => {
                 if (isMountedRef.current) {
-                    setRecordingDuration(prev => prev + 1);
+                    setRecordingDuration(prev => {
+                        // 5 MINUTE LIMIT
+                        if (prev >= JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS) {
+                            stopAudioRecording();
+                            showToast("Recording limit reached (5 mins).", "info");
+                            return JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS;
+                        }
+                        return prev + 1;
+                    });
                 }
             }, 1000);
         } catch (error: any) {
@@ -632,7 +1028,6 @@ export function JournalEditor({
     const removeAudio = async () => {
         if (!userId || !audioPath) return;
 
-        // UX SAFETY: Confirm before deletion with UI modal
         const confirmed = await showConfirm({
             title: "Delete Voice Note",
             message: "Delete this voice note? This cannot be undone.",
@@ -641,13 +1036,47 @@ export function JournalEditor({
         });
         if (!confirmed) return;
 
-        const pathToDelete = audioPath;
+        // ROLLBACK STATE
+        const previousPath = audioPath;
+        const previousUrl = audioDisplayUrl;
+
         setAudioPath(null);
         setAudioDisplayUrl(null);
-        await supabase.storage.from('journal-media-private').remove([pathToDelete]);
 
-        const dateStr = format(currentDate, 'yyyy-MM-dd');
-        await supabase.from('entries').update({ audio_url: null }).eq('user_id', userId).eq('date', dateStr);
+        try {
+            // DB FIRST Strategy
+            const dateStr = format(currentDate, 'yyyy-MM-dd');
+            const { error: dbError } = await supabase
+                .from('entries')
+                .update({ audio_url: null, updated_at: new Date().toISOString() })
+                .eq('user_id', userId)
+                .eq('date', dateStr);
+
+            if (dbError) throw dbError;
+
+            const { error: storageError } = await supabase.storage
+                .from('journal-media-private')
+                .remove([previousPath]);
+
+            if (storageError) {
+                console.warn("Storage deletion failed (orphaned file):", storageError);
+            }
+
+            // Update cache
+            const cacheKey = `entry_cache_${userId}_${dateStr}`;
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) {
+                const data = JSON.parse(cached);
+                data.audio_url = null;
+                localStorage.setItem(cacheKey, JSON.stringify(data));
+            }
+
+        } catch (error) {
+            console.error("Failed to delete voice note:", error);
+            setAudioPath(previousPath);
+            setAudioDisplayUrl(previousUrl);
+            showToast("Failed to delete voice note.", "error");
+        }
     };
 
     // --- STT Logic (Tiered: Whisper Online / WebSpeech Offline) ---
@@ -674,15 +1103,11 @@ export function JournalEditor({
 
             // SMART FALLBACK: If nominally online, do a quick API health check
             // If API is broken (e.g., auth issues), fall back to offline mode proactively
+            // OPTIMIZED AUTH: Use local session check or cached userId to avoid redundant API hits
             if (tier !== "offline") {
-                try {
-                    const { data: { session } } = await supabase.auth.getSession();
-                    if (!session?.access_token) {
-                        console.log("No session - using offline STT mode");
-                        tier = "offline";
-                    }
-                } catch (e) {
-                    console.log("Auth check failed - using offline STT mode");
+                const { data: { session } } = await supabase.auth.getSession();
+                if (!session?.access_token && !userId) {
+                    console.log("No session - using offline STT mode");
                     tier = "offline";
                 }
             }
@@ -743,7 +1168,14 @@ export function JournalEditor({
                 };
 
                 recognitionRef.current = recognition;
-                recognition.start();
+                try {
+                    recognition.start();
+                } catch (startError: any) {
+                    console.error("Failed to start speech recognition:", startError);
+                    showToast("Could not start voice recognition. Please try again.", "error");
+                    setIsRecording(false);
+                    return;
+                }
 
             } else {
                 // === ONLINE MODE: Whisper (High Quality) ===
@@ -831,86 +1263,158 @@ export function JournalEditor({
         ocrFileInputRef.current?.click();
     };
 
+    // Memoized Handlers for Menu Buttons
+    const handleMicButtonClick = useCallback(() => {
+        if (isGuest && onGuestAction) {
+            onGuestAction();
+            return;
+        }
+        if (isRecording) {
+            toggleRecording();
+            return;
+        }
+        if (isRecordingAudio) {
+            stopAudioRecording();
+            return;
+        }
+        setShowMicMenu(prev => !prev);
+        setShowCameraMenu(false);
+        triggerHaptic(5);
+    }, [isGuest, onGuestAction, isRecording, isRecordingAudio, toggleRecording, stopAudioRecording, triggerHaptic]);
+
+    const handleCameraButtonClick = useCallback(() => {
+        if (isGuest && onGuestAction) {
+            onGuestAction();
+            return;
+        }
+        setShowCameraMenu(prev => !prev);
+        setShowMicMenu(false);
+        triggerHaptic(5);
+    }, [isGuest, onGuestAction, triggerHaptic]);
+
     // --- OCR Processing (HYBRID: Online + Offline Fallback) ---
     const handleOCRUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
         const file = e.target.files[0];
-        e.target.value = "";
+        e.target.value = ""; // Reset input
 
-        // VALIDATION: Supported image types
-        const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/bmp'];
-        if (!file.type.startsWith('image/')) {
-            showToast("Please select an image file (JPG, PNG, WebP, etc.)", "warning");
+        // Cancel any in-progress OCR
+        if (ocrAbortControllerRef.current) {
+            ocrAbortControllerRef.current.abort();
+        }
+        ocrAbortControllerRef.current = new AbortController();
+        const signal = ocrAbortControllerRef.current.signal;
+
+        if (!userId) return;
+
+        // Capture initial state for race condition check
+        const startDateStr = format(currentDate, 'yyyy-MM-dd');
+
+        // Validation
+        if (!(await validateImageFile(file))) {
+            showToast("Invalid image file. Please use a valid image.", "error");
             return;
         }
-        if (!supportedTypes.includes(file.type) && !file.type.startsWith('image/')) {
-            showToast(`Unsupported image format: ${file.type}`, "warning");
-            return;
-        }
 
-        // VALIDATION: Image size limit (50MB max for processing)
-        const MAX_IMAGE_SIZE_MB = 50;
-        if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
-            showToast(`Image too large! Max size: ${MAX_IMAGE_SIZE_MB}MB`, "error");
+        // Hard Limit check on input
+        if (file.size > JOURNAL_CONFIG.MAX_RAW_IMAGE_SIZE_MB * 1024 * 1024) {
+            showToast(`Image too large (Max ${JOURNAL_CONFIG.MAX_RAW_IMAGE_SIZE_MB}MB).`, "error");
             return;
         }
 
         setIsProcessingOCR(true);
-        showToast("Processing image for text extraction...", "info");
-
-        // Check if online for high-quality OCR
-        const isOnline = navigator.onLine;
-
-        // RELAXED SECURITY: Trusted ai.ts to handle 401/Refresh
-        // We only force offline if there is NO network.
-        // If the key is expired, ai.ts will auto-refresh it.
-
-        if (!isOnline) {
-            // Show quality notice for offline mode
-            showToast("Offline mode. Quality may be lower.", "info");
-        }
 
         try {
+            if (signal.aborted) return;
+
+            // Optimize for OCR
+            const compressedBlob = await compressImage(
+                file,
+                JOURNAL_CONFIG.OCR_IMAGE_QUALITY,
+                JOURNAL_CONFIG.OCR_IMAGE_MAX_SIZE
+            );
+
+            if (signal.aborted) return;
+
+            // Post-compression size guard
+            if (compressedBlob.size > JOURNAL_CONFIG.MAX_OCR_IMAGE_SIZE_MB * 1024 * 1024) {
+                throw new Error("Image too complex for OCR. Please crop or resize.");
+            }
+
+            const processedFile = new File([compressedBlob], "ocr_temp.webp", { type: "image/webp" });
+
+            // Import and run OCR (Tiered)
+            const { extractTextOffline } = await import("@/utils/ocr-offline");
+
             let text = "";
 
-            if (isOnline) {
-                // ONLINE: Use Groq Vision API (high quality)
-                try {
-                    const compressedBlob = await compressImage(file);
-                    const compressedFile = new File([compressedBlob], file.name, { type: 'image/webp' });
-                    text = await performOCR(compressedFile);
-                } catch (onlineError: any) {
-                    // AUTOMATIC FALLBACK: If online fails for ANY reason, try offline
-                    console.warn("Online OCR failed, falling back to offline:", onlineError.message);
+            // Check Network Tier
+            const { detectNetworkTier } = await import("@/utils/stt-tiered");
+            const tier = detectNetworkTier();
 
-                    try {
-                        const { extractTextOffline } = await import('@/utils/ocr-offline');
-                        text = await extractTextOffline(file);
-                        console.log("Offline OCR fallback succeeded");
-                    } catch (offlineError) {
-                        // Both failed - throw the original online error for better feedback
-                        throw onlineError;
-                    }
-                }
+            // ABORT WRAPPER
+            const abortableOCR = <T,>(promise: Promise<T>, timeout: number) => {
+                return new Promise<T>((resolve, reject) => {
+                    const timer = setTimeout(() => reject(new Error("OCR Timeout")), timeout);
+                    signal.addEventListener("abort", () => {
+                        clearTimeout(timer);
+                        reject(new DOMException("Aborted", "AbortError"));
+                    }, { once: true });
+
+                    promise.then(res => {
+                        clearTimeout(timer);
+                        if (!signal.aborted) resolve(res);
+                    }).catch(err => {
+                        clearTimeout(timer);
+                        reject(err);
+                    });
+                });
+            };
+
+            if (tier === 'offline') {
+                if (signal.aborted) return;
+                text = await abortableOCR(extractTextOffline(processedFile), JOURNAL_CONFIG.OCR_TIMEOUT_MS);
             } else {
-                // OFFLINE: Use Tesseract.js (local processing)
-                const { extractTextOffline } = await import('@/utils/ocr-offline');
-                text = await extractTextOffline(file);
+                try {
+                    // Online: performOCR takes a File object directly
+                    text = await performOCR(processedFile);
+                } catch (err: any) {
+                    // Check if it was an abort
+                    if (err.name === 'AbortError' || signal.aborted) throw err;
+
+                    console.warn("Online OCR failed, falling back to offline", err);
+                    text = await abortableOCR(extractTextOffline(processedFile), JOURNAL_CONFIG.OCR_TIMEOUT_MS);
+                }
+            }
+
+            if (signal.aborted) return;
+
+            // Verify we're still on the same date (Double check)
+            const currentDateStr = format(currentDate, 'yyyy-MM-dd');
+            if (currentDateStr !== startDateStr) {
+                console.log("Date changed during OCR - discarding result");
+                return;
             }
 
             if (text && isMountedRef.current) {
+                // Sanitize: Remove control characters
+                const cleanText = text.replace(/[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
+
                 setContent(prev => {
+                    // Smart append
                     const needsSpace = prev.length > 0 && !prev.endsWith(' ') && !prev.endsWith('\n');
-                    return prev + (needsSpace ? '\n\n' : '') + text;
+                    return prev + (needsSpace ? ' ' : '') + cleanText;
                 });
-            } else if (isMountedRef.current) {
-                showToast("No text found in image.", "info");
+                showToast("Text extracted from image!", "success");
             }
-        } catch (error) {
-            console.error("OCR failed:", error);
-            if (isMountedRef.current) {
-                showToast("OCR failed. Please try again.", "error");
+
+        } catch (error: any) {
+            if (error.name === 'AbortError' || signal.aborted) {
+                console.log("OCR aborted");
+                return;
             }
+            console.error("OCR Error:", error);
+            showToast(error.message || "Could not read text from image.", "error");
         } finally {
             if (isMountedRef.current) {
                 setIsProcessingOCR(false);
@@ -935,7 +1439,7 @@ export function JournalEditor({
         if (e.dataTransfer.files?.length > 0 && e.dataTransfer.files[0].type.startsWith('image/')) {
             processFile(e.dataTransfer.files[0]);
         }
-    }, [userId]);
+    }, [processFile]);
 
     const navigateDate = useCallback((direction: 'prev' | 'next') => {
         const newDate = direction === 'prev' ? subDays(currentDate, 1) : addDays(currentDate, 1);
@@ -1032,11 +1536,26 @@ export function JournalEditor({
             {displayUrl && (
                 <div className="relative w-full max-w-sm mx-auto mt-6 mb-8 group/image">
                     <div className="relative rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-100/50 dark:bg-zinc-900/50 shadow-xl dark:shadow-2xl">
-                        <img
-                            src={displayUrl}
-                            alt="Entry"
-                            className="w-full h-auto max-h-[500px] object-contain transition-transform duration-700 hover:scale-[1.02]"
-                        />
+                        {imageLoadError ? (
+                            <div className="w-full h-48 flex flex-col items-center justify-center gap-2 text-zinc-500">
+                                <X className="w-8 h-8" />
+                                <span className="text-sm">Image failed to load</span>
+                                <button
+                                    onClick={refreshImageUrl} // Targeted refresh - only reloads image URL
+                                    className="text-xs text-blue-500 hover:underline"
+                                >
+                                    Retry
+                                </button>
+                            </div>
+                        ) : (
+                            <img
+                                src={displayUrl}
+                                alt={`Journal entry for ${format(currentDate, 'MMMM d, yyyy')}`}
+                                className="w-full h-auto max-h-[500px] object-contain transition-transform duration-700 hover:scale-[1.02]"
+                                onError={() => setImageLoadError(true)}
+                                onLoad={() => setImageLoadError(false)}
+                            />
+                        )}
                         <div className="absolute inset-0 bg-black/0 group-hover/image:bg-black/20 transition-colors" />
                     </div>
                     <button
@@ -1075,17 +1594,7 @@ export function JournalEditor({
                 {/* Voice Group */}
                 <div className="relative" ref={micMenuRef}>
                     <button
-                        onClick={() => {
-                            if (isGuest && onGuestAction) {
-                                onGuestAction();
-                                return;
-                            }
-                            if (isRecording) { toggleRecording(); return; }
-                            if (isRecordingAudio) { stopAudioRecording(); return; }
-                            setShowMicMenu(!showMicMenu);
-                            setShowCameraMenu(false);
-                            triggerHaptic(5);
-                        }}
+                        onClick={handleMicButtonClick}
                         className={cn(
                             "group p-3.5 rounded-full transition-all duration-300 relative",
                             isRecording ? "bg-zinc-200 dark:bg-zinc-800 ring-4 ring-zinc-300/30 dark:ring-zinc-700/30" :
@@ -1150,15 +1659,7 @@ export function JournalEditor({
                 {/* Camera Group */}
                 <div className="relative" ref={cameraMenuRef}>
                     <button
-                        onClick={() => {
-                            if (isGuest && onGuestAction) {
-                                onGuestAction();
-                                return;
-                            }
-                            setShowCameraMenu(!showCameraMenu);
-                            setShowMicMenu(false);
-                            triggerHaptic(5);
-                        }}
+                        onClick={handleCameraButtonClick}
                         disabled={isUploading || isProcessingOCR}
                         className={cn(
                             "group p-3.5 rounded-full transition-all duration-300 disabled:opacity-50 relative",
@@ -1194,7 +1695,7 @@ export function JournalEditor({
                                 className="flex items-center gap-3 p-3 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-2xl transition-colors text-left"
                             >
                                 <div className="w-8 h-8 rounded-xl bg-blue-50 dark:bg-blue-500/10 flex items-center justify-center">
-                                    <AudioLines className="w-4 h-4 text-blue-500" />
+                                    <ScanText className="w-4 h-4 text-blue-500" />
                                 </div>
                                 <div>
                                     <div className="text-zinc-900 dark:text-zinc-100 text-sm font-semibold">Scan Text</div>
