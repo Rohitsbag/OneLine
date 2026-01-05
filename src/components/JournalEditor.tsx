@@ -129,6 +129,7 @@ export function JournalEditor({
     const [pendingSync, setPendingSync] = useState(false);
 
     const [userId, setUserId] = useState<string | null>(null);
+    const [entryId, setEntryId] = useState<string | null>(null); // MASTER FIX: Immutable Entry Identity
     const fileInputRef = useRef<HTMLInputElement>(null);
 
 
@@ -428,6 +429,7 @@ export function JournalEditor({
                 setContent(cached.content || "");
                 setImagePath(cached.image_url || null);
                 setAudioPath(cached.audio_url || null);
+                setEntryId(cached.id || null); // Load Identity
                 // LOCK NOW: Allow saving immediate edits to the cached content
                 contentDateRef.current = dateStr;
             }
@@ -436,11 +438,10 @@ export function JournalEditor({
             contentDateRef.current = dateStr;
         }
 
-        // STEP 2: Try to fetch from server (if online)
         try {
             const { data, error } = await supabase
                 .from('entries')
-                .select('content, image_url, audio_url, updated_at')
+                .select('id, content, image_url, audio_url, updated_at')
                 .eq('user_id', userId)
                 .eq('date', dateStr)
                 .abortSignal(abortControllerRef.current.signal)
@@ -472,6 +473,7 @@ export function JournalEditor({
                     setContent(data.content || "");
                     setImagePath(data.image_url || null);
                     setAudioPath(data.audio_url || null);
+                    setEntryId(data.id); // Bind to Server Identity
                 } else if (!isActiveDate) {
                     console.log("Fetch result discarded - user navigated away");
                     return;
@@ -643,6 +645,7 @@ export function JournalEditor({
         // OFFLINE-FIRST: Always update local cache first
         const cacheKey = `entry_cache_${userId}_${dateStr}`;
         const cacheData = {
+            id: entryId, // Save Identity
             content: currentContent,
             image_url: currentImagePath,
             audio_url: currentAudioPath,
@@ -673,16 +676,42 @@ export function JournalEditor({
             return;
         }
 
-        const { error } = await supabase
-            .from('entries')
-            .upsert({
-                user_id: userId,
-                date: dateStr,
-                content: currentContent,
-                image_url: currentImagePath,
-                audio_url: currentAudioPath,
-                updated_at: new Date().toISOString()
-            }, { onConflict: 'user_id, date' });
+        let error;
+
+        // MASTER FIX: Strict Identity-Based Updates
+        if (entryId) {
+            // We have an identity - enforce strict update
+            const result = await supabase
+                .from('entries')
+                .update({
+                    content: currentContent,
+                    image_url: currentImagePath,
+                    audio_url: currentAudioPath,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', entryId);
+            error = result.error;
+        } else {
+            // First Write (or offline created) - Use Upsert to Resolve Date Conflict
+            // This creates the identity if missing, or recovers it if we missed the sync
+            const result = await supabase
+                .from('entries')
+                .upsert({
+                    user_id: userId,
+                    date: dateStr,
+                    content: currentContent,
+                    image_url: currentImagePath,
+                    audio_url: currentAudioPath,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'user_id, date' })
+                .select('id') // GET THE IDENTITY
+                .single();
+
+            error = result.error;
+            if (result.data?.id && isMountedRef.current) {
+                setEntryId(result.data.id); // Bind immediately
+            }
+        }
 
         if (isMountedRef.current) {
             if (error) {
@@ -706,7 +735,7 @@ export function JournalEditor({
             setIsSaving(false);
         }
         isDirtyRef.current = false;
-    }, [userId]);
+    }, [userId, entryId]);
 
     useEffect(() => {
         if (!userId || isLoading) return;
@@ -881,9 +910,11 @@ export function JournalEditor({
         } catch (error) {
             console.error("Failed to delete image:", error);
             // Rollback Logic
-            setImagePath(previousPath);
-            setDisplayUrl(previousUrl);
-            showToast("Failed to delete image. Please try again.", "error");
+            if (isMountedRef.current) {
+                setImagePath(previousPath);
+                setDisplayUrl(previousUrl);
+                showToast("Failed to delete image. Please try again.", "error");
+            }
         }
     };
 
@@ -1100,9 +1131,11 @@ export function JournalEditor({
 
         } catch (error) {
             console.error("Failed to delete voice note:", error);
-            setAudioPath(previousPath);
-            setAudioDisplayUrl(previousUrl);
-            showToast("Failed to delete voice note.", "error");
+            if (isMountedRef.current) {
+                setAudioPath(previousPath);
+                setAudioDisplayUrl(previousUrl);
+                showToast("Failed to delete voice note.", "error");
+            }
         }
     };
 
@@ -1126,7 +1159,8 @@ export function JournalEditor({
 
             // Check Network Tier
             const { detectNetworkTier, getSTTModel } = await import("@/utils/stt-tiered");
-            let tier = detectNetworkTier();
+            // FORCE OFFLINE if state indicates offline (e.g. API failed previously)
+            let tier = isOffline ? 'offline' : detectNetworkTier();
 
             // SMART FALLBACK: If nominally online, do a quick API health check
             // If API is broken (e.g., auth issues), fall back to offline mode proactively
@@ -1226,22 +1260,38 @@ export function JournalEditor({
                         setIsTranscribing(true);
                         try {
                             const { transcribeAudio } = await import("@/utils/ai");
-                            const model = getSTTModel(tier); // whisper-large-v3 or turbo
+                            let model = getSTTModel(tier); // Default model
 
-                            const text = await transcribeAudio(blob, model);
-                            if (text && isMountedRef.current) {
-                                setContent(prev => {
-                                    const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                    return prev + (needsSpace ? ' ' : '') + text;
-                                });
+                            try {
+                                const text = await transcribeAudio(blob, model);
+                                if (text && isMountedRef.current) {
+                                    setContent(prev => {
+                                        const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                        return prev + (needsSpace ? ' ' : '') + text;
+                                    });
+                                }
+                            } catch (primaryError) {
+                                // FALLBACK 1: Try Turbo if Large failed
+                                if (model === 'whisper-large-v3') {
+                                    console.warn("Primary STT failed, trying Turbo fallback...");
+                                    const turboText = await transcribeAudio(blob, 'whisper-large-v3-turbo');
+                                    if (turboText && isMountedRef.current) {
+                                        setContent(prev => {
+                                            const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                            return prev + (needsSpace ? ' ' : '') + turboText;
+                                        });
+                                        return; // Success
+                                    }
+                                }
+                                throw primaryError; // Re-throw if fallback didn't catch it
                             }
+
                         } catch (err: any) {
                             console.error("Transcription failed:", err);
-                            // Specific feedback for Auth/Network issues
-                            if (err.message?.includes("401") || err.message?.includes("Unauthorized")) {
-                                showToast("Session expired. Please sign in again.", "warning");
-                            } else {
-                                showToast("Transcription failed. Please try again.", "error");
+                            // FALLBACK 2: Force Offline Mode for NEXT attempt
+                            if (isMountedRef.current) {
+                                setIsOffline(true); // Switch app to offline mode
+                                showToast("Online transcription failed. Switched to Offline Voice Typing.", "warning");
                             }
                         } finally {
                             if (isMountedRef.current) setIsTranscribing(false);

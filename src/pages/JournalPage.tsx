@@ -281,6 +281,7 @@ export function JournalPage() {
                 </div>
 
                 <JournalEditor
+                    key={selectedDate.toISOString()} // NUCLEAR OPTION: Destroy editor on date change
                     date={selectedDate}
                     onDateChange={setSelectedDate}
                     minDate={minDate}
