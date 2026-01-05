@@ -805,7 +805,7 @@ export function JournalEditor({
         setDisplayUrl(objectUrl);
 
         try {
-            const compressedBlob = await compressImage(file, JOURNAL_CONFIG.IMAGE_UPLOAD_QUALITY, JOURNAL_CONFIG.IMAGE_UPLOAD_MAX_SIZE);
+            const compressedBlob = await compressImage(file, JOURNAL_CONFIG.IMAGE_UPLOAD_MAX_SIZE, 1500);
 
             // COMPRESSION VALIDATION
             if (!compressedBlob || compressedBlob.size === 0) {
@@ -838,9 +838,28 @@ export function JournalEditor({
         } catch (error: any) {
             console.error("Image upload failed:", error);
             if (isMountedRef.current) {
-                showToast(error.message || "Failed to upload image.", "error");
-                setDisplayUrl(null);
-                setImagePath(null);
+                // FALLBACK: If compression failed but original is safe (< 10MB), use original
+                if (file.size < JOURNAL_CONFIG.MAX_COMPRESSED_IMAGE_SIZE_MB * 1024 * 1024) {
+                    console.warn("Compression failed, using original file as fallback.", error);
+
+                    const fileName = `${userId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+                    const { error: uploadError } = await supabase.storage
+                        .from('journal-media-private')
+                        .upload(fileName, file);
+
+                    if (uploadError) {
+                        showToast("Upload failed: " + uploadError.message, "error");
+                        setDisplayUrl(null);
+                        setImagePath(null);
+                    } else {
+                        setImagePath(fileName);
+                        showToast("Image uploaded (uncompressed fallback)", "warning");
+                    }
+                } else {
+                    showToast(error.message || "Failed to upload image. Try a smaller file.", "error");
+                    setDisplayUrl(null);
+                    setImagePath(null);
+                }
             }
         } finally {
             if (isMountedRef.current) {
