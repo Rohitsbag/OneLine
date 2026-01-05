@@ -75,14 +75,26 @@ serve(async (req: Request) => {
     }
 
     const token = authHeader.replace("Bearer ", "");
+
+    // DEBUG: Log environment status
+    console.log("=== AI PROXY DEBUG ===");
+    console.log("SUPABASE_URL set:", !!SUPABASE_URL);
+    console.log("SUPABASE_ANON_KEY set:", !!SUPABASE_ANON_KEY);
+    console.log("Token length:", token.length);
+
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         global: { headers: { Authorization: `Bearer ${token}` } }
     });
 
     const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    // DEBUG: Log auth result
+    console.log("Auth error:", authError?.message || "none");
+    console.log("User found:", !!user);
+
     if (authError || !user) {
         return new Response(
-            JSON.stringify({ error: "Invalid or expired token" }),
+            JSON.stringify({ error: "Invalid or expired token", details: authError?.message }),
             { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
     }
