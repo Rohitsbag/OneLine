@@ -634,13 +634,10 @@ export function JournalEditor({
             const { detectNetworkTier, getSTTModel } = await import("@/utils/stt-tiered");
             let tier = detectNetworkTier();
 
-            // SECURITY: Force offline if no active session token (prevents 401 errors)
-            // We check access_token specifically because that's what ai.ts needs
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session?.access_token) {
-                console.log("No valid access token. Forcing Offline STT.");
-                tier = "offline";
-            }
+            // RELAXED SECURITY: Trust ai.ts to handle 401/Refresh
+            // We only force offline if there is NO network.
+            // If the key is expired, ai.ts will auto-refresh it.
+
 
             if (tier === "offline") {
                 // === OFFLINE MODE: Web Speech API ===
@@ -802,22 +799,19 @@ export function JournalEditor({
         // Check if online for high-quality OCR
         const isOnline = navigator.onLine;
 
-        // SECURITY: Check for session to avoid 401s
-        const { data: { session } } = await supabase.auth.getSession();
-        const hasSession = !!session;
+        // RELAXED SECURITY: Trusted ai.ts to handle 401/Refresh
+        // We only force offline if there is NO network.
+        // If the key is expired, ai.ts will auto-refresh it.
 
-        if (!isOnline || !hasSession) {
+        if (!isOnline) {
             // Show quality notice for offline mode
-            alert(hasSession
-                ? "📶 Connect to internet for higher quality scan.\n\nUsing offline OCR (may be less accurate for handwriting)."
-                : "👤 Sign in for high-quality AI scan.\n\nUsing offline OCR (basic)."
-            );
+            alert("📶 Connect to internet for best quality.\n\nUsing offline mode (basic).");
         }
 
         try {
             let text = "";
 
-            if (isOnline && hasSession) {
+            if (isOnline) {
                 // ONLINE: Use Groq Vision API (high quality)
                 const compressedBlob = await compressImage(file);
                 const compressedFile = new File([compressedBlob], file.name, { type: 'image/webp' });
