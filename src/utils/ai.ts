@@ -5,8 +5,8 @@
 import { supabase } from "@/utils/supabase/client";
 import { startOfWeek, endOfWeek, format } from 'date-fns';
 
-// Use Vercel API route instead of Supabase Edge Function
-const AI_PROXY_URL = `/api/ai-proxy`;
+// Use full URL for Android APK compatibility (relative URLs don't work in Capacitor)
+const AI_PROXY_URL = `https://get-one-line.vercel.app/api/ai-proxy`;
 
 interface ChatRequest {
     action: "chat";
