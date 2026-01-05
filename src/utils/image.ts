@@ -18,6 +18,15 @@ export async function compressImage(file: File, maxDimension = 2048, targetSizeK
             img.onload = () => {
                 let width = img.width;
                 let height = img.height;
+
+                console.log(`[compressImage] Loaded: ${width}x${height}, File: ${file.name} (${(file.size / 1024).toFixed(2)}KB), Type: ${file.type}`);
+
+                if (width === 0 || height === 0) {
+                    console.error("[compressImage] Invalid dimensions 0x0");
+                    reject(new Error("Image loaded with 0 dimensions"));
+                    return;
+                }
+
                 let quality = 0.9;
                 let scale = 1.0;
 

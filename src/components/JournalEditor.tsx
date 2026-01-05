@@ -1337,6 +1337,9 @@ export function JournalEditor({
             if (signal.aborted) return;
 
             // Post-compression size guard
+            if (compressedBlob.size === 0) {
+                throw new Error("Image compression failed (0 bytes). Try a different image.");
+            }
             if (compressedBlob.size > JOURNAL_CONFIG.MAX_OCR_IMAGE_SIZE_MB * 1024 * 1024) {
                 throw new Error("Image too complex for OCR. Please crop or resize.");
             }
