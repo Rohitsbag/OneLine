@@ -1328,10 +1328,11 @@ export function JournalEditor({
             if (signal.aborted) return;
 
             // Optimize for OCR
+            // Args: file, maxDimension (px), targetSize (KB)
             const compressedBlob = await compressImage(
                 file,
-                JOURNAL_CONFIG.OCR_IMAGE_QUALITY,
-                JOURNAL_CONFIG.OCR_IMAGE_MAX_SIZE
+                JOURNAL_CONFIG.OCR_IMAGE_MAX_SIZE, // 1024px
+                1024 // Target 1MB (plenty for OCR text)
             );
 
             if (signal.aborted) return;
