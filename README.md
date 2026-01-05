@@ -24,7 +24,7 @@
 Because we treat journaling as a *performance* rather than a *practice*. We feel we need to write profound essays every night. When we're tired, we skip it. When we skip it, we feel guilt. The habit dies.
 
 **The "Data Rot"**
-We capture thousands of photos and texts, but they are scattered. Our digital memories are rotting in data silos—unorganized, unsearchable, and disconnected from our emotional state.
+We capture thousands of photos and texts, but they are scattered. Our digital memories are rotting in data silosunorganized, unsearchable, and disconnected from our emotional state.
 
 ---
 
@@ -49,7 +49,7 @@ OneLine isn't just an app; it's a philosophy.
 
 ### 🎤 Voice Features (The "Star Trek" Factor)
 - **Tap to Speak:** Instant transcription for when you're walking or driving.
-- **Hold to Record:** Capture the raw emotion of your voice. Imagine listening to your own voice from 10 years ago—tired, happy, real.
+- **Hold to Record:** Capture the raw emotion of your voice. Imagine listening to your own voice from 10 years agotired, happy, real.
 
 ### 📷 Vision Features (The "Digital Scanner")
 - **Tap to Attach:** One visual anchor per day to prevent "time blur".
