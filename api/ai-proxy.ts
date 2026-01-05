@@ -13,8 +13,6 @@ const corsHeaders = {
 
 // Allowed models for security
 const ALLOWED_CHAT_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.2-11b-vision-preview",
     "meta-llama/llama-4-maverick-17b-128e-instruct",
     "meta-llama/llama-4-scout-17b-16e-instruct"
 ];
@@ -49,10 +47,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         if (body.action === "chat") {
             // Chat Completions (for OCR)
-            const requestedModel = body.model || "llama-3.3-70b-versatile";
+            const requestedModel = body.model;
             const modelToUse = ALLOWED_CHAT_MODELS.includes(requestedModel)
                 ? requestedModel
-                : "llama-3.3-70b-versatile";
+                : "meta-llama/llama-4-maverick-17b-128e-instruct";
 
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 45000);

@@ -16,6 +16,7 @@ interface JournalEditorProps {
     accentColor?: string;
     isGuest?: boolean;
     onGuestAction?: () => void;
+    refreshTrigger?: number;
 }
 
 export function JournalEditor({
@@ -24,7 +25,8 @@ export function JournalEditor({
     minDate,
     accentColor = "bg-indigo-500",
     isGuest = false,
-    onGuestAction
+    onGuestAction,
+    refreshTrigger = 0
 }: JournalEditorProps) {
     const [content, setContent] = useState("");
     const [imagePath, setImagePath] = useState<string | null>(null);
@@ -155,6 +157,12 @@ export function JournalEditor({
         };
     }, [userId]);
 
+    useEffect(() => {
+        if (refreshTrigger > 0) {
+            syncPendingData();
+        }
+    }, [refreshTrigger, userId]);
+
     const syncPendingData = async () => {
         const pendingRaw = localStorage.getItem('pending_journal_sync');
         if (!pendingRaw || !userId) return;
@@ -229,20 +237,29 @@ export function JournalEditor({
         const dateStr = format(currentDate, 'yyyy-MM-dd');
         const cacheKey = `entry_cache_${userId}_${dateStr}`;
 
+        // STEP 0: Reset state immediately to prevent "Today" text showing on "Yesterday"
+        if (isMountedRef.current) {
+            setContent("");
+            setImagePath(null);
+            setAudioPath(null);
+            setDisplayUrl(null);
+            setAudioDisplayUrl(null);
+            setIsLoading(true);
+            // CRITICAL: Reset dirty flag for the new date
+            isDirtyRef.current = false;
+        }
+
         // STEP 1: Load from localStorage cache first (instant)
         const cachedEntry = localStorage.getItem(cacheKey);
         if (cachedEntry) {
             const cached = JSON.parse(cachedEntry);
-            setContent(cached.content || "");
-            setImagePath(cached.image_url || null);
-            setAudioPath(cached.audio_url || null);
-        } else {
-            // No cache - start fresh
-            setContent("");
-            setImagePath(null);
-            setDisplayUrl(null);
+            if (isMountedRef.current) {
+                setContent(cached.content || "");
+                setImagePath(cached.image_url || null);
+                setAudioPath(cached.audio_url || null);
+            }
         }
-        setIsLoading(true);
+        // No else needed here as we already reset to empty in STEP 0
 
         // STEP 2: Try to fetch from server (if online)
         try {
@@ -259,9 +276,14 @@ export function JournalEditor({
             } else if (data && isMountedRef.current) {
                 // Update cache with server data
                 localStorage.setItem(cacheKey, JSON.stringify(data));
-                setContent(data.content || "");
-                setImagePath(data.image_url || null);
-                setAudioPath(data.audio_url || null);
+
+                // On initial fetch for a date, we ALWAYS want to update UI 
+                // unless the user has already started typing on THIS specific date
+                if (!isDirtyRef.current) {
+                    setContent(data.content || "");
+                    setImagePath(data.image_url || null);
+                    setAudioPath(data.audio_url || null);
+                }
             }
         } catch (error) {
             // Offline - already using cached data
@@ -275,7 +297,7 @@ export function JournalEditor({
 
     useEffect(() => {
         fetchEntry();
-    }, [fetchEntry]);
+    }, [fetchEntry, refreshTrigger]);
 
     // Image Signed URL
     useEffect(() => {
@@ -402,11 +424,12 @@ export function JournalEditor({
         const dateStr = format(currentDate, 'yyyy-MM-dd');
 
         isDirtyRef.current = true;
+        // Immediate Feedback: Show saving pulse as soon as typing starts
+        if (isMountedRef.current) setIsSaving(true);
 
         const timeoutId = setTimeout(() => {
-            if (isMountedRef.current) setIsSaving(true);
             saveEntry(dateStr, content, imagePath, audioPath);
-        }, 1000);
+        }, 800);
 
         return () => {
             clearTimeout(timeoutId);
@@ -833,6 +856,7 @@ export function JournalEditor({
         }
 
         setIsProcessingOCR(true);
+        showToast("Processing image for text extraction...", "info");
 
         // Check if online for high-quality OCR
         const isOnline = navigator.onLine;

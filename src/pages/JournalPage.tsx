@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Header } from "@/components/Header";
 import { JournalEditor } from "@/components/JournalEditor";
+import { cn } from "@/lib/utils";
 import { WeeklyReflection } from "@/components/WeeklyReflection";
 import { CalendarOverlay } from "@/components/CalendarOverlay";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
@@ -13,7 +14,13 @@ export function JournalPage() {
     const [showSettings, setShowSettings] = useState(false);
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [aiEnabled, setAiEnabled] = useState(true);
-    const [accentColor, setAccentColor] = useState("bg-indigo-500"); // Default
+    const [accentColor, setAccentColor] = useState("bg-indigo-500");
+    const [refreshTrigger, setRefreshTrigger] = useState(0);
+    const [pullProgress, setPullProgress] = useState(0);
+    const [isPulling, setIsPulling] = useState(false);
+    const startY = useRef<number | null>(null);
+    const PULL_THRESHOLD = 120;
+
     const [isDark, setIsDark] = useState(() => {
         if (typeof window !== 'undefined') {
             const saved = localStorage.getItem('theme');
@@ -177,6 +184,48 @@ export function JournalPage() {
         }
     };
 
+    const handleTouchStart = (e: React.TouchEvent) => {
+        if (window.scrollY === 0) {
+            startY.current = e.touches[0].clientY;
+            setIsPulling(true);
+        }
+    };
+
+    const handleTouchMove = (e: React.TouchEvent) => {
+        if (startY.current === null) return;
+        const currentY = e.touches[0].clientY;
+        const diff = currentY - startY.current;
+
+        if (diff > 0 && window.scrollY === 0) {
+            // Logarithmic pulling feel
+            const progress = Math.min(diff / 1.5, PULL_THRESHOLD + 20);
+            setPullProgress(progress);
+            if (diff > 20) {
+                // Prevent browser-default pull behavior on some browsers
+                if (e.cancelable) e.preventDefault();
+            }
+        } else {
+            setPullProgress(0);
+            setIsPulling(false);
+        }
+    };
+
+    const handleTouchEnd = () => {
+        if (pullProgress > PULL_THRESHOLD) {
+            triggerRefresh();
+        }
+        setPullProgress(0);
+        setIsPulling(false);
+        startY.current = null;
+    };
+
+    const triggerRefresh = () => {
+        setRefreshTrigger(prev => prev + 1);
+        if (typeof window !== 'undefined' && navigator.vibrate) {
+            navigator.vibrate(10); // Subtle haptic feedback
+        }
+    };
+
     if (isLoadingAuth) {
         return (
             <div className="min-h-screen bg-zinc-50 dark:bg-[#09090b] flex items-center justify-center">
@@ -201,20 +250,52 @@ export function JournalPage() {
                 accentColor={accentColor}
             />
 
-            <JournalEditor
-                date={selectedDate}
-                onDateChange={setSelectedDate}
-                minDate={minDate}
-                accentColor={accentColor}
-                isGuest={isGuest}
-                onGuestAction={() => setShowAuthModal(true)}
-            />
-
-            {aiEnabled && (
-                <div className="w-full px-4 pb-12">
-                    <WeeklyReflection accentColor={accentColor} />
+            <div
+                className="flex-1 w-full relative"
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+            >
+                {/* Pull to Refresh Indicator */}
+                <div
+                    className="absolute top-0 left-0 right-0 flex justify-center pointer-events-none z-40 overflow-hidden transition-all duration-300"
+                    style={{
+                        height: isPulling ? `${pullProgress}px` : '0',
+                        opacity: Math.min(pullProgress / PULL_THRESHOLD, 1)
+                    }}
+                >
+                    <div className={cn(
+                        "mt-4 p-2 rounded-full shadow-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 transition-transform duration-200",
+                        pullProgress > PULL_THRESHOLD ? "scale-110 rotate-180" : "scale-100"
+                    )}>
+                        <div className={cn(
+                            "w-6 h-6 border-2 border-zinc-300 dark:border-zinc-700 rounded-full flex items-center justify-center",
+                            pullProgress > PULL_THRESHOLD && "border-t-transparent animate-spin"
+                        )}>
+                            <div className={cn(
+                                "w-1.5 h-1.5 rounded-full",
+                                pullProgress > PULL_THRESHOLD ? "hidden" : accentColor
+                            )} />
+                        </div>
+                    </div>
                 </div>
-            )}
+
+                <JournalEditor
+                    date={selectedDate}
+                    onDateChange={setSelectedDate}
+                    minDate={minDate}
+                    accentColor={accentColor}
+                    isGuest={isGuest}
+                    onGuestAction={() => setShowAuthModal(true)}
+                    refreshTrigger={refreshTrigger}
+                />
+
+                {aiEnabled && (
+                    <div className="w-full px-4 pb-12">
+                        <WeeklyReflection accentColor={accentColor} key={`reflection-${refreshTrigger}`} />
+                    </div>
+                )}
+            </div>
 
             <CalendarOverlay
                 isOpen={showCalendar}

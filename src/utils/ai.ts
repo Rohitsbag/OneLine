@@ -114,7 +114,20 @@ async function executeOCRCall(base64Image: string): Promise<string> {
                 content: [
                     {
                         type: "text",
-                        text: "Task:Extract all readable text from the provided image.Requirements:Preserve original formatting exactly (line breaks, spacing, paragraph structure).Maintain reading order (top-to-bottom, left-to-right).Include all visible text: headings, body text, captions, footnotes, labels, numbers, symbols.Do not summarize, interpret, correct, or rewrite the text.Do not add explanations, comments, or metadata.If text is partially unclear, transcribe it as-is to the best possible accuracy.If no text is present, return an empty response.Output Rules:Return ONLY the extracted text.No prefixes, no quotes, no markdown, no conversational filler."
+                        text: `Task: Extract all readable text from the provided image.
+
+Requirements:
+- Preserve original formatting exactly (line breaks, spacing, paragraph structure).
+- Maintain reading order (top-to-bottom, left-to-right).
+- Include all visible text: headings, body text, captions, footnotes, labels, numbers, symbols.
+- Do not summarize, interpret, correct, or rewrite the text.
+- Do not add explanations, comments, or metadata.
+- If text is partially unclear, transcribe it as-is to the best possible accuracy.
+- If no text is present, return an empty response.
+
+Output Rules:
+- Return ONLY the extracted text.
+- No prefixes, no quotes, no markdown, no conversational filler.`
                     },
                     { type: "image_url", image_url: { url: base64Image } }
                 ]
@@ -125,13 +138,13 @@ async function executeOCRCall(base64Image: string): Promise<string> {
     }, controller.signal);
 
     try {
-        // TIER 1: Main (Maverick)
+        // TIER 1: Maverick (Primary)
         return await callOCRModel("meta-llama/llama-4-maverick-17b-128e-instruct");
     } catch (mainError: any) {
         if (mainError.name === 'AbortError') throw new Error("OCR Request Timed Out");
         console.warn("Main OCR model failed, trying fallback...", mainError);
 
-        // TIER 2: Fallback (Scout)
+        // TIER 2: Scout (Faster/Standard)
         return await callOCRModel("meta-llama/llama-4-scout-17b-16e-instruct");
     } finally {
         clearTimeout(timeoutId);
@@ -236,7 +249,7 @@ export async function generateWeeklyReflection(userId: string): Promise<string> 
 
         const aiPromise = callAIProxy({
             action: "chat",
-            model: "llama-3.3-70b-versatile",
+            model: "meta-llama/llama-4-maverick-17b-128e-instruct",
             messages: [{ role: "user", content: prompt }],
             temperature: 0.7,
             max_tokens: 300,
