@@ -114,6 +114,8 @@ export function JournalEditor({
     onGuestAction,
     refreshTrigger = 0
 }: JournalEditorProps) {
+    const currentDate = date; // Define early for Ref usage
+
     const [content, setContent] = useState("");
     const [imagePath, setImagePath] = useState<string | null>(null);
     const [displayUrl, setDisplayUrl] = useState<string | null>(null);
@@ -179,6 +181,7 @@ export function JournalEditor({
     const isDirtyRef = useRef(false);
     // Prevents memory leaks - guards async state updates after unmount
     const isMountedRef = useRef(true);
+    const activeDateRef = useRef(currentDate); // Tracks the currently active date for async checks
     // Prevents SST duplication - tracks last appended transcript
     const lastAppendedTextRef = useRef("");
     // Recording timer state
@@ -192,7 +195,7 @@ export function JournalEditor({
     // Toast/Confirm UI (replaces native alert/confirm)
     const { showToast, showConfirm } = useToast();
 
-    const currentDate = date;
+    // currentDate already defined at top
 
     // Auth & Initial Fetch
     useEffect(() => {
@@ -382,6 +385,11 @@ export function JournalEditor({
         }
     }, [refreshTrigger, userId, syncPendingData]);
 
+    // Update activeDateRef immediately when date changes
+    useEffect(() => {
+        activeDateRef.current = currentDate;
+    }, [currentDate]);
+
 
 
     // Fetch Entry (OFFLINE-FIRST)
@@ -457,10 +465,16 @@ export function JournalEditor({
 
                 // On initial fetch for a date, we ALWAYS want to update UI 
                 // unless the user has already started typing on THIS specific date
-                if (!isDirtyRef.current) {
+                // CRITICAL: Check against activeDateRef to ensure we haven't navigated away
+                const isActiveDate = format(activeDateRef.current, 'yyyy-MM-dd') === dateStr;
+
+                if (!isDirtyRef.current && isActiveDate) {
                     setContent(data.content || "");
                     setImagePath(data.image_url || null);
                     setAudioPath(data.audio_url || null);
+                } else if (!isActiveDate) {
+                    console.log("Fetch result discarded - user navigated away");
+                    return;
                 }
                 // Update the lock to allow saving for THIS date now
                 contentDateRef.current = dateStr;
@@ -783,7 +797,13 @@ export function JournalEditor({
 
             // MEMORY LEAK GUARD: Only update state if still mounted
             if (isMountedRef.current) {
-                setImagePath(fileName);
+                // NAVIGATION RACE GUARD:
+                const isActiveDate = format(activeDateRef.current, 'yyyy-MM-dd') === format(currentDate, 'yyyy-MM-dd');
+                if (isActiveDate) {
+                    setImagePath(fileName);
+                } else {
+                    console.log("Image upload finished but user navigated away - discarding UI update");
+                }
             }
 
         } catch (error: any) {
@@ -948,8 +968,15 @@ export function JournalEditor({
                     // CRITICAL FIX: Update State FIRST.
                     // This immediately triggers the debounced 'saveEntry' effect which handles the upsert cleanly.
                     if (isMountedRef.current) {
-                        setAudioPath(fileName);
-                        setHasError(false);
+                        // NAVIGATION RACE GUARD:
+                        const isActiveDate = format(activeDateRef.current, 'yyyy-MM-dd') === format(currentDate, 'yyyy-MM-dd');
+                        if (isActiveDate) {
+                            setAudioPath(fileName);
+                            setHasError(false);
+                        } else {
+                            console.log("Audio recording finished but user navigated away - discarding UI update");
+                            return; // Do not schedule deletion of 'oldAudioPath' because we didn't actually replace it in this view
+                        }
                     }
 
                     // RACE CONDITION PREVENTION:
@@ -1393,9 +1420,9 @@ export function JournalEditor({
 
             if (signal.aborted) return;
 
-            // Verify we're still on the same date (Double check)
-            const currentDateStr = format(currentDate, 'yyyy-MM-dd');
-            if (currentDateStr !== startDateStr) {
+            // Verify we're still on the same date using Ref (Fresh Value)
+            const currentActiveDateStr = format(activeDateRef.current, 'yyyy-MM-dd');
+            if (currentActiveDateStr !== startDateStr) {
                 console.log("Date changed during OCR - discarding result");
                 return;
             }
