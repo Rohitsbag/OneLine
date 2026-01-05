@@ -30,7 +30,14 @@ export async function compressImage(file: File, maxDimension = 2048, targetSizeK
                         const ctx = canvas.getContext('2d');
                         if (ctx) {
                             ctx.drawImage(img, 0, 0, currentWidth, currentHeight);
-                            canvas.toBlob((b) => res(b!), 'image/jpeg', currentQuality);
+                            canvas.toBlob((b) => {
+                                if (b) {
+                                    res(b);
+                                } else {
+                                    console.error("Canvas toBlob compression failed");
+                                    res(new Blob([])); // Fallback
+                                }
+                            }, 'image/jpeg', currentQuality);
                         } else {
                             res(new Blob([])); // Should not happen
                         }

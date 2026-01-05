@@ -436,9 +436,9 @@ export function JournalEditor({
                 .eq('user_id', userId)
                 .eq('date', dateStr)
                 .abortSignal(abortControllerRef.current.signal)
-                .single();
+                .maybeSingle();
 
-            if (error && error.code !== 'PGRST116') {
+            if (error) {
                 // If aborted, check multiple patterns
                 const isAborted =
                     error.name === 'AbortError' ||
