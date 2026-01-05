@@ -15,9 +15,11 @@ interface ChatRequest {
     max_tokens?: number;
 }
 
-async function callAIProxy(body: ChatRequest, signal?: AbortSignal, retry = true): Promise<string> {
+async function callAIProxy(body: ChatRequest, signal?: AbortSignal): Promise<string> {
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token || "";
+
+    let hasRetried = false; // Track retry state INSIDE the function
 
     const makeRequest = async (authToken: string): Promise<string> => {
         const response = await fetch(AI_PROXY_URL, {
@@ -31,14 +33,14 @@ async function callAIProxy(body: ChatRequest, signal?: AbortSignal, retry = true
         });
 
         if (!response.ok) {
-            // Handle 401 specifically
-            if (response.status === 401 && retry) {
+            // Handle 401 specifically - only retry ONCE
+            if (response.status === 401 && !hasRetried) {
+                hasRetried = true; // Prevent further retries
                 console.log("AI Proxy 401. Attempting session refresh...");
                 const { data: { session: newSession }, error: refreshError } = await supabase.auth.refreshSession();
 
                 if (!refreshError && newSession?.access_token) {
                     console.log("Session refreshed. Retrying with new token...");
-                    // CRITICAL: Use the NEW token directly, don't call getSession() again
                     return makeRequest(newSession.access_token);
                 } else {
                     console.error("Session refresh failed:", refreshError?.message || "No new session");
@@ -173,7 +175,9 @@ export async function transcribeAudio(audioBlob: Blob, model: string): Promise<s
         const timeoutId = setTimeout(() => controller.abort(), 45000);
 
         try {
-            const performTranscription = async (retry = true, overrideToken?: string): Promise<string> => {
+            let hasRetried = false; // Track retry state
+
+            const performTranscription = async (overrideToken?: string): Promise<string> => {
                 // Use override token if provided (after refresh), otherwise get from session
                 let token = overrideToken;
                 if (!token) {
@@ -196,14 +200,15 @@ export async function transcribeAudio(audioBlob: Blob, model: string): Promise<s
                 });
 
                 if (!response.ok) {
-                    if (response.status === 401 && retry) {
+                    // Handle 401 - only retry ONCE
+                    if (response.status === 401 && !hasRetried) {
+                        hasRetried = true; // Prevent further retries
                         console.log("Transcription 401. Attempting session refresh...");
                         const { data: { session: newSession }, error: refreshError } = await supabase.auth.refreshSession();
 
                         if (!refreshError && newSession?.access_token) {
                             console.log("Session refreshed. Retrying with new token...");
-                            // CRITICAL: Pass the NEW token directly, don't rely on getSession()
-                            return performTranscription(false, newSession.access_token);
+                            return performTranscription(newSession.access_token);
                         } else {
                             console.error("Session refresh failed:", refreshError?.message || "No new session");
                         }

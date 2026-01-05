@@ -813,9 +813,23 @@ export function JournalEditor({
 
             if (isOnline) {
                 // ONLINE: Use Groq Vision API (high quality)
-                const compressedBlob = await compressImage(file);
-                const compressedFile = new File([compressedBlob], file.name, { type: 'image/webp' });
-                text = await performOCR(compressedFile);
+                try {
+                    const compressedBlob = await compressImage(file);
+                    const compressedFile = new File([compressedBlob], file.name, { type: 'image/webp' });
+                    text = await performOCR(compressedFile);
+                } catch (onlineError: any) {
+                    // AUTOMATIC FALLBACK: If online fails for ANY reason, try offline
+                    console.warn("Online OCR failed, falling back to offline:", onlineError.message);
+
+                    try {
+                        const { extractTextOffline } = await import('@/utils/ocr-offline');
+                        text = await extractTextOffline(file);
+                        console.log("Offline OCR fallback succeeded");
+                    } catch (offlineError) {
+                        // Both failed - throw the original online error for better feedback
+                        throw onlineError;
+                    }
+                }
             } else {
                 // OFFLINE: Use Tesseract.js (local processing)
                 const { extractTextOffline } = await import('@/utils/ocr-offline');
