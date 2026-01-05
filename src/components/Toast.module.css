@@ -1,0 +1,183 @@
+.toastContainer {
+    position: fixed;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.toast {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    border-radius: 12px;
+    background: rgba(30, 30, 40, 0.95);
+    backdrop-filter: blur(10px);
+    color: #fff;
+    font-size: 14px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    animation: slideUp 0.3s ease-out;
+    pointer-events: auto;
+    cursor: pointer;
+    max-width: 320px;
+}
+
+.toast:hover {
+    opacity: 0.9;
+}
+
+.icon {
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.message {
+    flex: 1;
+    line-height: 1.4;
+}
+
+/* Toast Types */
+.info {
+    border-left: 4px solid #60a5fa;
+}
+
+.info .icon {
+    color: #60a5fa;
+}
+
+.success {
+    border-left: 4px solid #34d399;
+}
+
+.success .icon {
+    color: #34d399;
+}
+
+.error {
+    border-left: 4px solid #f87171;
+}
+
+.error .icon {
+    color: #f87171;
+}
+
+.warning {
+    border-left: 4px solid #fbbf24;
+}
+
+.warning .icon {
+    color: #fbbf24;
+}
+
+/* Confirm Modal */
+.modalOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10001;
+    animation: fadeIn 0.2s ease-out;
+}
+
+.modal {
+    background: linear-gradient(135deg, rgba(30, 30, 45, 0.98), rgba(20, 20, 35, 0.98));
+    border: 1px solid rgba(100, 100, 140, 0.3);
+    border-radius: 16px;
+    padding: 24px;
+    max-width: 340px;
+    width: 90%;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+    animation: scaleIn 0.2s ease-out;
+}
+
+.modalTitle {
+    margin: 0 0 12px 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.modalMessage {
+    margin: 0 0 24px 0;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.7);
+    line-height: 1.5;
+}
+
+.modalButtons {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+}
+
+.cancelButton {
+    padding: 10px 20px;
+    border-radius: 10px;
+    border: 1px solid rgba(100, 100, 140, 0.4);
+    background: transparent;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.cancelButton:hover {
+    background: rgba(100, 100, 140, 0.2);
+}
+
+.confirmButton {
+    padding: 10px 20px;
+    border-radius: 10px;
+    border: none;
+    background: linear-gradient(135deg, #f87171, #dc2626);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.confirmButton:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+/* Animations */
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}

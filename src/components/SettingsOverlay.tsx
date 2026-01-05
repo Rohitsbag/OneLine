@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/utils/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { ACCENT_COLORS } from "@/constants/colors";
+import { useToast } from "./Toast";
 
 interface SettingsOverlayProps {
     isOpen: boolean;
@@ -17,6 +18,7 @@ interface SettingsOverlayProps {
 export function SettingsOverlay({ isOpen, onClose, aiEnabled, onToggleAi, accentColor = "bg-indigo-500", onAccentChange }: SettingsOverlayProps) {
     const [email, setEmail] = useState<string | null>(null);
     const navigate = useNavigate();
+    const { showToast } = useToast();
 
     useEffect(() => {
         if (isOpen) {
@@ -49,7 +51,7 @@ export function SettingsOverlay({ isOpen, onClose, aiEnabled, onToggleAi, accent
 
         // Warn user if data was truncated
         if (count && count > EXPORT_LIMIT) {
-            alert(`Note: Export limited to most recent ${EXPORT_LIMIT} entries. You have ${count} total entries.`);
+            showToast(`Export limited to most recent ${EXPORT_LIMIT} entries.`, "warning");
         }
 
         const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' });

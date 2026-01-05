@@ -3,6 +3,7 @@ import { supabase } from '@/utils/supabase/client';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader2, Sparkles, Eye, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useToast } from '@/components/Toast';
 
 export function AuthPage() {
     const [isLoading, setIsLoading] = useState(false);
@@ -12,6 +13,7 @@ export function AuthPage() {
     const [error, setError] = useState<string | null>(null);
     const [showPassword, setShowPassword] = useState(false);
     const navigate = useNavigate();
+    const { showToast } = useToast();
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -24,7 +26,7 @@ export function AuthPage() {
                     redirectTo: `${window.location.origin}/auth`,
                 });
                 if (error) throw error;
-                alert("Check your email for the password reset link!");
+                showToast("Check your email for the password reset link!", "success");
                 setMode('signin');
             } else if (mode === 'signup') {
                 const { error } = await supabase.auth.signUp({
@@ -32,7 +34,7 @@ export function AuthPage() {
                     password,
                 });
                 if (error) throw error;
-                alert("Check your email for the confirmation link!");
+                showToast("Check your email for the confirmation link!", "success");
             } else {
                 const { error } = await supabase.auth.signInWithPassword({
                     email,

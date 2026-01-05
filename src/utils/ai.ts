@@ -112,7 +112,10 @@ async function executeOCRCall(base64Image: string): Promise<string> {
             {
                 role: "user",
                 content: [
-                    { type: "text", text: "Extract all text from this image. Preserve the formatting (newlines). Return ONLY the extracted text, do not add any conversational filler." },
+                    {
+                        type: "text",
+                        text: "Task:Extract all readable text from the provided image.Requirements:Preserve original formatting exactly (line breaks, spacing, paragraph structure).Maintain reading order (top-to-bottom, left-to-right).Include all visible text: headings, body text, captions, footnotes, labels, numbers, symbols.Do not summarize, interpret, correct, or rewrite the text.Do not add explanations, comments, or metadata.If text is partially unclear, transcribe it as-is to the best possible accuracy.If no text is present, return an empty response.Output Rules:Return ONLY the extracted text.No prefixes, no quotes, no markdown, no conversational filler."
+                    },
                     { type: "image_url", image_url: { url: base64Image } }
                 ]
             }

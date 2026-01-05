@@ -7,6 +7,7 @@ import { compressImage } from "@/utils/image";
 import { AudioPlayer } from "./AudioPlayer";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { performOCR } from "@/utils/ai";
+import { useToast } from "./Toast";
 
 interface JournalEditorProps {
     date: Date;
@@ -68,6 +69,9 @@ export function JournalEditor({
     // Recording timer state
     const [recordingDuration, setRecordingDuration] = useState(0);
     const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Toast/Confirm UI (replaces native alert/confirm)
+    const { showToast, showConfirm } = useToast();
 
     const currentDate = date;
 
@@ -459,7 +463,7 @@ export function JournalEditor({
         } catch (error) {
             console.error("Image upload failed:", error);
             if (isMountedRef.current) {
-                alert("Failed to upload image.");
+                showToast("Failed to upload image.", "error");
                 setDisplayUrl(null);
                 setImagePath(null);
             }
@@ -479,8 +483,14 @@ export function JournalEditor({
     const removeImage = async () => {
         if (!userId || !imagePath) return;
 
-        // UX SAFETY: Confirm before deletion
-        if (!confirm("Delete this image? This cannot be undone.")) return;
+        // UX SAFETY: Confirm before deletion with UI modal
+        const confirmed = await showConfirm({
+            title: "Delete Image",
+            message: "Delete this image? This cannot be undone.",
+            confirmText: "Delete",
+            cancelText: "Cancel"
+        });
+        if (!confirmed) return;
 
         const pathToDelete = imagePath;
         setImagePath(null);
@@ -496,7 +506,7 @@ export function JournalEditor({
     // --- Audio Logic ---
     const startAudioRecording = async () => {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            alert("Audio recording not supported.");
+            showToast("Audio recording not supported.", "error");
             return;
         }
 
@@ -545,8 +555,7 @@ export function JournalEditor({
 
                 if (error) {
                     console.error("Audio upload failed:", error);
-                    // BUG FIX: Make failure visible to user
-                    alert("Voice note upload failed. Please check your connection and try again.");
+                    showToast("Voice note upload failed. Please check your connection and try again.", "error");
                     if (isMountedRef.current) {
                         setHasError(true);
                     }
@@ -578,9 +587,9 @@ export function JournalEditor({
         } catch (error: any) {
             console.error("Error starting audio:", error);
             if (error.name === 'NotAllowedError') {
-                alert("Microphone access denied. If you are using the Android app, please ensure Microphone permissions are enabled in the App Settings.");
+                showToast("Microphone access denied. Please enable microphone permissions in settings.", "error");
             } else {
-                alert("Could not start microphone: " + error.message);
+                showToast("Could not start microphone: " + error.message, "error");
             }
         }
     };
@@ -600,8 +609,14 @@ export function JournalEditor({
     const removeAudio = async () => {
         if (!userId || !audioPath) return;
 
-        // UX SAFETY: Confirm before deletion
-        if (!confirm("Delete this voice note? This cannot be undone.")) return;
+        // UX SAFETY: Confirm before deletion with UI modal
+        const confirmed = await showConfirm({
+            title: "Delete Voice Note",
+            message: "Delete this voice note? This cannot be undone.",
+            confirmText: "Delete",
+            cancelText: "Cancel"
+        });
+        if (!confirmed) return;
 
         const pathToDelete = audioPath;
         setAudioPath(null);
@@ -653,7 +668,7 @@ export function JournalEditor({
                 // === OFFLINE MODE: Web Speech API ===
                 const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
                 if (!SpeechRecognition) {
-                    alert("Offline voice recognition not supported on this device.");
+                    showToast("Offline voice recognition not supported on this device.", "warning");
                     return;
                 }
 
@@ -742,9 +757,9 @@ export function JournalEditor({
                             console.error("Transcription failed:", err);
                             // Specific feedback for Auth/Network issues
                             if (err.message?.includes("401") || err.message?.includes("Unauthorized")) {
-                                alert("Session expired. Please sign in again for high-quality transcription, or use offline mode.");
+                                showToast("Session expired. Please sign in again.", "warning");
                             } else {
-                                alert("Transcription failed. Please try again.");
+                                showToast("Transcription failed. Please try again.", "error");
                             }
                         } finally {
                             if (isMountedRef.current) setIsTranscribing(false);
@@ -757,7 +772,7 @@ export function JournalEditor({
 
                 } catch (err) {
                     console.error("Mic error:", err);
-                    alert("Could not access microphone.");
+                    showToast("Could not access microphone.", "error");
                 }
             }
         }
@@ -802,18 +817,18 @@ export function JournalEditor({
         // VALIDATION: Supported image types
         const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/bmp'];
         if (!file.type.startsWith('image/')) {
-            alert("❌ Please select an image file.\n\nSupported formats: JPG, PNG, GIF, WebP, HEIC, BMP");
+            showToast("Please select an image file (JPG, PNG, WebP, etc.)", "warning");
             return;
         }
         if (!supportedTypes.includes(file.type) && !file.type.startsWith('image/')) {
-            alert(`❌ Unsupported image format: ${file.type}\n\nSupported formats: JPG, PNG, GIF, WebP, HEIC, BMP`);
+            showToast(`Unsupported image format: ${file.type}`, "warning");
             return;
         }
 
         // VALIDATION: Image size limit (50MB max for processing)
         const MAX_IMAGE_SIZE_MB = 50;
         if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
-            alert(`❌ Image too large!\n\nYour image: ${(file.size / (1024 * 1024)).toFixed(1)}MB\nMaximum size: ${MAX_IMAGE_SIZE_MB}MB\n\nPlease use a smaller image or compress it first.`);
+            showToast(`Image too large! Max size: ${MAX_IMAGE_SIZE_MB}MB`, "error");
             return;
         }
 
@@ -828,7 +843,7 @@ export function JournalEditor({
 
         if (!isOnline) {
             // Show quality notice for offline mode
-            alert("📶 Connect to internet for best quality.\n\nUsing offline mode (basic).");
+            showToast("Offline mode. Quality may be lower.", "info");
         }
 
         try {
@@ -865,12 +880,12 @@ export function JournalEditor({
                     return prev + (needsSpace ? '\n\n' : '') + text;
                 });
             } else if (isMountedRef.current) {
-                alert("Could not extract text from this image.");
+                showToast("No text found in image.", "info");
             }
         } catch (error) {
             console.error("OCR failed:", error);
             if (isMountedRef.current) {
-                alert("OCR failed. Please try again.");
+                showToast("OCR failed. Please try again.", "error");
             }
         } finally {
             if (isMountedRef.current) {
