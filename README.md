@@ -10,6 +10,9 @@
 [![Powered by Supabase](https://img.shields.io/badge/Supabase-Backend-3ECF8E?style=flat&logo=supabase)](https://supabase.com)
 [![AI by Groq](https://img.shields.io/badge/Groq-Llama_3.3-F55036?style=flat)](https://groq.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Production Ready](https://img.shields.io/badge/Status-Production_Ready-success?style=flat)](https://github.com/Rohitsbag/OneLine)
+
+**🚀 New**: Dual STT recording, offline-first UX, production-grade reliability
 
 [Features](#-features) • [The Philosophy](#-the-philosophy) • [Tech Stack](#-tech-stack) • [Deployment](#-deployment)
 
@@ -60,6 +63,25 @@ OneLine isn't just an app; it's a philosophy.
 - **Pattern Recognition:** "You often mention 'anxiety' on Sunday nights."
 - **Positive Reinforcement:** "You've exercised 3 times this week, and your mood was notably higher."
 - **Weekly Wisdom:** Gentle, non-judgmental insights delivered every Sunday.
+
+---
+
+## 🎯 Recent Improvements (Production-Ready)
+
+### 🔒 **Production-Grade Reliability**
+- **Dual STT Recording:** Browser Speech API runs in parallel as pre-computed backup (zero transcription loss)
+- **OCR Never Fails:** 3-tier fallback (Maverick → Scout → Tesseract.js)
+- **Smart Autosave:** 7-second debounce prevents API spam while ensuring data safety
+- **History Isolation:** Cross-date undo prevention (data corruption impossible)
+
+### 📡 **Offline-First Experience**
+- **Sync Status Indicators:** WhatsApp-like feedback (○ Saved, ✓ Synced, ⚠ Pending, ✗ Failed)
+- **Offline Banner:** Non-blocking visual feedback when disconnected
+- **Smart Queue:** Automatic sync with conflict resolution when online
+
+### 🔔 **Native Notifications**
+- **Daily Reminders:** Schedule journal prompts at your preferred time
+- **Cross-Platform:** Native Android/iOS notifications via Capacitor
 
 ---
 
