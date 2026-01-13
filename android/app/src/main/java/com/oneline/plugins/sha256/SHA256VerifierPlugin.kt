@@ -5,11 +5,7 @@ import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.JSObject
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import java.io.File
 import java.io.FileInputStream
 import java.security.MessageDigest
@@ -17,7 +13,7 @@ import java.security.MessageDigest
 @CapacitorPlugin(name = "SHA256Verifier")
 class SHA256VerifierPlugin : Plugin() {
     
-    private val scope = CoroutineScope(Dispatchers.Main)
+    private val pluginScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     
     @PluginMethod
     fun verify(call: PluginCall) {
@@ -29,14 +25,12 @@ class SHA256VerifierPlugin : Plugin() {
             return
         }
         
-        scope.launch {
+        pluginScope.launch {
             try {
-                val isValid = withContext(Dispatchers.IO) {
-                    computeAndVerify(filePath, expectedHash)
-                }
-                
+                val isValid = computeAndVerify(filePath, expectedHash)
                 call.resolve(JSObject().put("isValid", isValid))
-                
+            } catch (e: CancellationException) {
+                // Handled by coroutine system
             } catch (e: Exception) {
                 call.reject("Verification failed: ${e.message}")
             }
@@ -50,30 +44,17 @@ class SHA256VerifierPlugin : Plugin() {
             throw Exception("File not found")
         }
         
-        val fileSize = file.length()
         val digest = MessageDigest.getInstance("SHA-256")
         val fis = FileInputStream(file)
         val buffer = ByteArray(8192)
         var bytesRead: Int
-        var totalRead: Long = 0
-        var lastReportedProgress = 0
         
         try {
             while (fis.read(buffer).also { bytesRead = it } != -1) {
-                if (!coroutineContext.isActive) {
-                    throw Exception("SHA-256 computation cancelled")
-                }
+                // Idiomatic cancellation check - works in any environment
+                yield()
                 
                 digest.update(buffer, 0, bytesRead)
-                totalRead += bytesRead
-                
-                // Report progress every 10%
-                if (fileSize > 0) {
-                    val progress = ((totalRead * 100) / fileSize).toInt()
-                    if (progress >= lastReportedProgress + 10) {
-                        lastReportedProgress = progress
-                    }
-                }
             }
             
             val hashBytes = digest.digest()
@@ -84,5 +65,10 @@ class SHA256VerifierPlugin : Plugin() {
         } finally {
             fis.close()
         }
+    }
+
+    override fun handleOnDestroy() {
+        super.handleOnDestroy()
+        pluginScope.cancel()
     }
 }

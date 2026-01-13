@@ -2,12 +2,12 @@ package com.oneline.workers
 
 import android.content.Context
 import androidx.work.CoroutineWorker
-import androidx.work.Data
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.oneline.plugins.filedownload.DownloadState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.io.File
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
@@ -34,12 +34,11 @@ class DownloadWorker(
             val file = File(downloadsDir, fileName)
             val existingBytes = if (file.exists()) file.length() else 0L
             
-            // Open connection with Range header
             val urlConnection = URL(url).openConnection() as HttpURLConnection
             connection = urlConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 15000
-            connection.readTimeout = 30000 // 30-second timeout per read
+            connection.readTimeout = 30000
             
             if (existingBytes > 0) {
                 connection.setRequestProperty("Range", "bytes=$existingBytes-")
@@ -78,21 +77,23 @@ class DownloadWorker(
             var count: Int
             
             while (input.read(buffer).also { count = it } != -1) {
+                // Ensure worker cancellation is respected
                 if (isStopped) {
                     downloadState.save(url, file.absolutePath, downloaded, totalBytes)
                     return@withContext Result.failure()
                 }
                 
+                // standard coroutine check
+                yield()
+                
                 output.write(buffer, 0, count)
                 downloaded += count
                 
-                // Save state every 1MB
                 if (downloaded - lastSavedBytes >= 1024 * 1024) {
                     downloadState.save(url, file.absolutePath, downloaded, totalBytes)
                     lastSavedBytes = downloaded
                 }
                 
-                // Report progress
                 if (totalBytes > 0) {
                     val progress = ((downloaded * 100) / totalBytes).toInt()
                     setProgress(workDataOf("progress" to progress))
@@ -100,7 +101,6 @@ class DownloadWorker(
             }
             
             downloadState.clear()
-            
             Result.success(workDataOf("filePath" to file.absolutePath))
             
         } catch (e: Exception) {
