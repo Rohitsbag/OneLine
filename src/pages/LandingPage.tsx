@@ -161,7 +161,7 @@ const Navbar = () => {
     );
 };
 
-const Hero = () => {
+const Hero = ({ downloadUrl }: { downloadUrl: string }) => {
     const [bgReady, setBgReady] = useState(false);
 
     useEffect(() => {
@@ -206,7 +206,7 @@ const Hero = () => {
                             <span className="relative z-10 flex items-center justify-center gap-2">Start Your Line <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" /></span>
                             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-zinc-200 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
                         </Link>
-                        <a href="/oneline.apk" download className="group w-full sm:w-auto px-8 py-4 bg-zinc-900 text-white border border-zinc-800 rounded-full font-medium text-lg hover:bg-zinc-800 transition-all hover:border-zinc-700 flex items-center justify-center gap-2 hover:scale-105 active:scale-95">
+                        <a href={downloadUrl} target="_blank" rel="noopener noreferrer" className="group w-full sm:w-auto px-8 py-4 bg-zinc-900 text-white border border-zinc-800 rounded-full font-medium text-lg hover:bg-zinc-800 transition-all hover:border-zinc-700 flex items-center justify-center gap-2 hover:scale-105 active:scale-95">
                             <Smartphone size={20} className="text-zinc-400 group-hover:text-white transition-colors" />
                             Download Android
                         </a>
@@ -500,7 +500,7 @@ const Roadmap = () => (
     </section>
 );
 
-const Footer = () => {
+const Footer = ({ downloadUrl }: { downloadUrl: string }) => {
     return (
         <footer className="relative bg-zinc-950 pt-20 pb-10 border-t border-white/5 overflow-hidden">
             <div className="relative z-10 max-w-7xl mx-auto px-6 lg:px-8">
@@ -540,7 +540,7 @@ const Footer = () => {
                             <Link to="/auth" className="flex items-center gap-2 text-zinc-500 hover:text-white transition-colors text-sm">
                                 <Smartphone size={16} /> Web App
                             </Link>
-                            <a href="/oneline.apk" download className="flex items-center gap-2 text-zinc-500 hover:text-white transition-colors text-sm">
+                            <a href={downloadUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-zinc-500 hover:text-white transition-colors text-sm">
                                 <Activity size={16} /> Android APK
                             </a>
                         </div>
@@ -558,10 +558,22 @@ const Footer = () => {
 };
 
 export function LandingPage() {
+    const [downloadUrl, setDownloadUrl] = useState("/oneline.apk"); // Fallback
+
+    useEffect(() => {
+        // Fetch latest version info for the download link
+        fetch('/version.json')
+            .then(res => res.json())
+            .then(data => {
+                if (data.downloadUrl) setDownloadUrl(data.downloadUrl);
+            })
+            .catch(err => console.error("Failed to fetch version info:", err));
+    }, []);
+
     return (
         <div className="bg-zinc-950 min-h-screen text-zinc-50 font-sans selection:bg-indigo-500/30 overflow-x-hidden">
             <Navbar />
-            <Hero />
+            <Hero downloadUrl={downloadUrl} />
             <ParadoxSection />
             <Features />
             <AntiFeatures />
@@ -577,7 +589,7 @@ export function LandingPage() {
                         <Link to="/auth" className="w-full sm:w-auto px-12 py-5 bg-white text-black rounded-full font-bold text-xl hover:bg-zinc-200 hover:scale-105 transition-all shadow-xl">
                             Get OneLine Free
                         </Link>
-                        <a href="/oneline.apk" download className="w-full sm:w-auto px-12 py-5 bg-zinc-900 text-white border border-zinc-800 rounded-full font-bold text-xl hover:bg-zinc-800 transition-all hover:scale-105 shadow-xl flex items-center justify-center gap-3">
+                        <a href={downloadUrl} target="_blank" rel="noopener noreferrer" className="w-full sm:w-auto px-12 py-5 bg-zinc-900 text-white border border-zinc-800 rounded-full font-bold text-xl hover:bg-zinc-800 transition-all hover:scale-105 shadow-xl flex items-center justify-center gap-3">
                             <Smartphone size={24} className="text-zinc-400" />
                             Download App
                         </a>
@@ -585,7 +597,7 @@ export function LandingPage() {
                 </div>
             </section>
 
-            <Footer />
+            <Footer downloadUrl={downloadUrl} />
         </div>
     );
 }
