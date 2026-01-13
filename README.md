@@ -140,6 +140,42 @@ supabase functions deploy ai-proxy
 
 ---
 
+## 📱 Mobile & Update System (Android)
+
+OneLine features a **10/10 production-grade** custom in-app update system designed for sideloaded/enterprise distribution.
+
+### 🛠️ Technical Specifications
+- **Background Downloads**: Powered by Android `WorkManager`. Downloads survive app restarts, process death, and device reboots.
+- **Resumable Transfers**: Uses `HTTP Range` headers and `RandomAccessFile` to resume interrupted downloads exactly where they left off.
+- **Security**: Mandatory **SHA-256** cryptographic integrity check before installation.
+- **Lifecycle-Safe**: Re-verifies update success on app resume via `appStateChange` listeners.
+- **Auto-Cleanup**: Automatically deletes the APK from storage after successful verification.
+
+### 🚀 Release Workflow
+
+To release a new update to your users:
+
+1. **Build & Hash**: Run the automated release script:
+   ```bash
+   npm run release:apk
+   ```
+   *This will build the web project, sync Capacitor, compile the Android release APK, and output the SHA-256 hash.*
+
+2. **Update Manifest**: Open `public/version.json` and:
+   - Increment `versionCode` (must be greater than the current one).
+   - Update `version` string.
+   - Paste the `sha256` hash output from the previous step.
+   - Update `downloadUrl` to point to the hosted APK (e.g., GitHub Release link).
+
+3. **Deploy**: Push the changes to GitHub and upload the APK to your release/hosting location.
+
+### 🧪 Development Tips
+- **Native Plugins**: Native logic is located in `android/app/src/main/java/com/oneline/plugins/`.
+- **Background Workers**: Download logic exists in `android/app/src/main/java/com/oneline/workers/DownloadWorker.kt`.
+- **Testing Updates**: To test the update flow locally, point `downloadUrl` in `version.json` to a local server or a test GitHub release.
+
+---
+
 ## 🗺️ Future Roadmap
 
 - [ ] **"Mood Weather Map"**: Visualize your year in colored pixels based on sentiment.
