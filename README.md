@@ -12,6 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Production Ready](https://img.shields.io/badge/Status-Production_Ready-success?style=flat)](https://github.com/Rohitsbag/OneLine)
 
+
 **🚀 New**: Dual STT recording, offline-first UX, production-grade reliability
 
 [Features](#-features) • [The Philosophy](#-the-philosophy) • [Tech Stack](#-tech-stack) • [Deployment](#-deployment)
