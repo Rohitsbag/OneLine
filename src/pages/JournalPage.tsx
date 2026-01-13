@@ -13,7 +13,7 @@ import { SignInModal } from "@/components/SignInModal";
 interface JournalPageProps {
     externalPinCode?: string | null;
     externalLockEnabled?: boolean;
-    onPinChange?: (pin: string) => void;
+    onPinChange?: (pin: string | null) => void;
     onLockToggle?: (enabled: boolean) => void;
 }
 
