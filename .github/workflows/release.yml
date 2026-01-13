@@ -1,0 +1,93 @@
+name: Build and Release Android APK
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags like v1.0.1
+
+permissions:
+  contents: write # Needed to upload releases and commit back to repo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build Web App
+        run: npm run build
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build Android APK
+        run: |
+          # Extract version from tag (e.g., v1.0.2 -> 1.0.2)
+          VERSION_NAME=${GITHUB_REF_NAME#v}
+          # Create a numeric version code based on build number or timestamp
+          VERSION_CODE=${{ github.run_number }}
+          
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease
+          cd ..
+          
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+        env:
+          VERSION_NAME: ${{ github.ref_name }}
+          VERSION_CODE: ${{ github.run_number }}
+
+      - name: Calculate Hash
+        id: calc_hash
+        run: |
+          APK_PATH="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          HASH=$(sha256sum $APK_PATH | awk '{ print $1 }')
+          echo "sha256=$HASH" >> $GITHUB_OUTPUT
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ steps.calc_hash.outputs.apk_path }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update version.json
+        run: |
+          # The download URL for the asset in a GitHub release follows this pattern:
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/app-release-unsigned.apk"
+          
+          node scripts/update-manifest.js "${{ env.VERSION_NAME }}" "${{ env.VERSION_CODE }}" "${{ steps.calc_hash.outputs.sha256 }}" "$DOWNLOAD_URL"
+
+      - name: Commit and Push Manifest Changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/version.json
+          git commit -m "chore: auto-update version.json for ${{ github.ref_name }}"
+          git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

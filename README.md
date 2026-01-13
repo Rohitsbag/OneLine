@@ -151,28 +151,73 @@ OneLine features a **10/10 production-grade** custom in-app update system design
 - **Lifecycle-Safe**: Re-verifies update success on app resume via `appStateChange` listeners.
 - **Auto-Cleanup**: Automatically deletes the APK from storage after successful verification.
 
-### 🚀 Release Workflow
+### 🚀 Automated Release Workflow (CI/CD)
 
-To release a new update to your users:
+OneLine is now equipped with a fully automated **GitHub Actions** pipeline. You no longer need to manually build, hash, or update manifests.
 
-1. **Build & Hash**: Run the automated release script:
-   ```bash
-   npm run release:apk
-   ```
-   *This will build the web project, sync Capacitor, compile the Android release APK, and output the SHA-256 hash.*
+To release a new update:
 
-2. **Update Manifest**: Open `public/version.json` and:
-   - Increment `versionCode` (must be greater than the current one).
-   - Update `version` string.
-   - Paste the `sha256` hash output from the previous step.
-   - Update `downloadUrl` to point to the hosted APK (e.g., GitHub Release link).
+1.  **Tag your commit**:
+    ```bash
+    git tag v1.0.1
+    git push origin v1.0.1
+    ```
+2.  **Wait for the Action**: GitHub will automatically:
+    - Build your production web app.
+    - Compile the signed Android Release APK.
+    - Calculate the SHA-256 fingerprint.
+    - Create a GitHub Release and upload the APK.
+    - **Update `version.json` automatically** and commit it back to your repository.
 
-3. **Deploy**: Push the changes to GitHub and upload the APK to your release/hosting location.
+The app will detect the update within minutes of the workflow completing.
+
+---
+
+## 🛠️ Advanced Development (Manual Control)
+If you need to run things manually:
+- `npm run release:apk`: Build and hash locally.
+- Native code is in `android/app/src/main/java/com/oneline/plugins/`.
+- `public/version.json` stores the current live version data.
 
 ### 🧪 Development Tips
 - **Native Plugins**: Native logic is located in `android/app/src/main/java/com/oneline/plugins/`.
 - **Background Workers**: Download logic exists in `android/app/src/main/java/com/oneline/workers/DownloadWorker.kt`.
 - **Testing Updates**: To test the update flow locally, point `downloadUrl` in `version.json` to a local server or a test GitHub release.
+
+---
+
+## 🤖 AI Agent Handover & Technical Context
+
+*This section provides critical context for future AI agents working on this codebase.*
+
+### 📂 Key File Map (Project Shortcuts)
+- **Frontend Orchestrator**: `src/App.tsx` (Handles update lifecycle & verification)
+- **Update Logic Service**: `src/utils/appUpdater.ts` (Native bridges & manifest checking)
+- **CI/CD Pipeline**: `.github/workflows/release.yml` (Automated build & release)
+- **Manifest Keeper**: `public/version.json` (Source of truth for versions)
+- **Native Android Plugins**: `android/app/src/main/java/com/oneline/plugins/` (Bridge logic)
+- **Background Worker**: `android/app/src/main/java/com/oneline/workers/DownloadWorker.kt` (Resumable downloads)
+
+### 🔌 Custom Capacitor Plugins
+1.  **PackageInfo**: Reads `versionCode` and `versionName` from the Android system.
+2.  **FileDownload**: Wraps `WorkManager` for persistent background downloads. Supports unique work naming (`app_update_download`).
+3.  **APKInstaller**: Handles the Android Intent for installation and post-install file cleanup (`deleteFile`).
+4.  **SHA256Verifier**: Cryptographic integrity check (runs after download, before install).
+
+### 🏗️ Build & Release Logic
+- **Dynamic Versioning**: `android/app/build.gradle` is configured to inject `VERSION_CODE` and `VERSION_NAME` from environment variables during CI.
+- **Rollup Resolution (CRITICAL)**: We use dynamic plugin access `(Capacitor as any).Plugins?.App` in `src/App.tsx` and `src/components/KillSwitchDialog.tsx`. **DO NOT** convert these back to static imports; Rollup fails to resolve `@capacitor/app` at build time in this environment.
+- **Verification Loop**: The system uses `localStorage.setItem('pending_update_verif', versionCode)` before installation. After the app reboots into the new version, `App.tsx` reads this to trigger `verifyInstallSuccess()`.
+
+### 🧠 Tiered Logic & Fallbacks
+- **Dual STT**: Real-time Browser Speech API runs in parallel with Whisper audio recording. If Whisper fails, the browser transcription is used as an immediate fallback.
+- **3-Tier OCR**: Logic in `src/utils/ocr.ts` (if applicable) follows a `Maverick -> Scout -> Tesseract.js` waterfall. Tesseract.js is the "final stand" offline fallback.
+- **Sync States**: The UI uses a strict 4-state indicator (`synced`, `local`, `pending`, `failed`) synchronized with the `JournalEditor.tsx` autosave logic.
+
+### 🛡️ Safety Constraints
+- **Multi-Tenancy**: Every table must have `tenant_id` and strict RLS. Never bypass this in queries.
+- **Atomic Updates**: SHA-256 must match exactly before the `APKInstaller` is triggered.
+- **Unique Work**: Only one `app_update_download` task can exist in `WorkManager` at a time (enforced via `ExistingWorkPolicy.KEEP`).
 
 ---
 
