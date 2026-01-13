@@ -40,8 +40,21 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
     const isPrevDisabled = !!minDate && endOfMonth(subMonths(viewDate, 1)) < minDate;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 dark:bg-black/60 backdrop-blur-sm" onClick={onClose}>
-            <div className="bg-white dark:bg-[#0a0a0a] border border-zinc-200 dark:border-zinc-800 p-6 rounded-3xl w-full max-w-sm shadow-2xl transition-colors duration-300" onClick={e => e.stopPropagation()}>
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 dark:bg-black/60 backdrop-blur-sm touch-manipulation select-none"
+            onClick={onClose}
+            onTouchEnd={(e) => {
+                // Ensure touch events close the modal on mobile
+                if (e.target === e.currentTarget) {
+                    onClose();
+                }
+            }}
+        >
+            <div
+                className="bg-white dark:bg-[#0a0a0a] border border-zinc-200 dark:border-zinc-800 p-6 rounded-3xl w-full max-w-sm shadow-2xl transition-colors duration-300 mx-4"
+                onClick={e => e.stopPropagation()}
+                onTouchEnd={e => e.stopPropagation()}
+            >
                 <div className="flex items-center justify-between mb-6">
                     <button
                         onClick={() => {

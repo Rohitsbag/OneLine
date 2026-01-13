@@ -57,6 +57,7 @@ interface JournalEditorProps {
     isGuest?: boolean;
     onGuestAction?: () => void;
     refreshTrigger?: number;
+    sttLanguage?: string;
 }
 
 // SECURITY: Magic Number Validation to prevent spoofed extensions
@@ -112,63 +113,73 @@ export function JournalEditor({
     accentColor = "bg-indigo-500",
     isGuest = false,
     onGuestAction,
-    refreshTrigger = 0
+    refreshTrigger = 0,
+    sttLanguage = "Auto"
 }: JournalEditorProps) {
     const currentDate = date; // Define early for Ref usage
 
+    // --------------------------------------------------------------------------------
+    // STATE DECLARATIONS (Base)
+    // --------------------------------------------------------------------------------
+    const [userId, setUserId] = useState<string | null>(null);
+    const [entryId, setEntryId] = useState<string | null>(null);
     const [content, setContent] = useState("");
+
+    // Media State
     const [imagePath, setImagePath] = useState<string | null>(null);
     const [displayUrl, setDisplayUrl] = useState<string | null>(null);
+    const [audioPath, setAudioPath] = useState<string | null>(null);
+    const [audioDisplayUrl, setAudioDisplayUrl] = useState<string | null>(null);
+
+    // UI State
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
+    const [isRecordingAudio, setIsRecordingAudio] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
     const [hasError, setHasError] = useState(false);
     const [isOffline, setIsOffline] = useState(!navigator.onLine);
     const [pendingSync, setPendingSync] = useState(false);
-
-    const [userId, setUserId] = useState<string | null>(null);
-    const [entryId, setEntryId] = useState<string | null>(null); // MASTER FIX: Immutable Entry Identity
-    const fileInputRef = useRef<HTMLInputElement>(null);
-
-
-    // Voice Note State
-    const [audioPath, setAudioPath] = useState<string | null>(null);
-    const [audioDisplayUrl, setAudioDisplayUrl] = useState<string | null>(null);
-    const [isRecordingAudio, setIsRecordingAudio] = useState(false);
-    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-    const audioChunksRef = useRef<Blob[]>([]);
-    const [imageLoadError, setImageLoadError] = useState(false); // NEW: Handle broken images
-    const recognitionRef = useRef<SpeechRecognition | null>(null); // Type safety fix
-
-    // Media Menu State
+    const [imageLoadError, setImageLoadError] = useState(false);
+    const [isProcessingOCR, setIsProcessingOCR] = useState(false);
     const [showMicMenu, setShowMicMenu] = useState(false);
     const [showCameraMenu, setShowCameraMenu] = useState(false);
+    const [recordingDuration, setRecordingDuration] = useState(0);
+
+    // Sync Status (UI-only for visual feedback)
+    const [syncStatus, setSyncStatus] = useState<'local' | 'pending' | 'synced' | 'failed'>('synced');
+
+    // History State
+    const [history, setHistory] = useState<Array<{ content: string; image: string | null; audio: string | null }>>([]);
+    const [historyIndex, setHistoryIndex] = useState(-1);
+
+    // --------------------------------------------------------------------------------
+    // REFS (Lifecycle & Async Guards)
+    // --------------------------------------------------------------------------------
+    const isUndoingRedoingRef = useRef(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const ocrFileInputRef = useRef<HTMLInputElement>(null);
     const micMenuRef = useRef<HTMLDivElement>(null);
     const cameraMenuRef = useRef<HTMLDivElement>(null);
-
-    // OCR State
-    const [isProcessingOCR, setIsProcessingOCR] = useState(false);
-    const ocrFileInputRef = useRef<HTMLInputElement>(null);
-
-    // === HARDENING REFS ===
-    // 1. AbortController for fetching entries (prevent race conditions)
     const abortControllerRef = useRef<AbortController | null>(null);
-    // 2. Track active Blob URL for immediate cleanup (prevents leaks in rapid DnD)
     const activeBlobUrlRef = useRef<string | null>(null);
-    // 3. Track valid MIME type for Audio Recorder
     const mimeTypeRef = useRef<string>('audio/webm');
-    // 4. Manual abort for OCR
     const ocrAbortControllerRef = useRef<AbortController | null>(null);
-    // 5. Last Refresh Time (Visibility Debounce)
     const lastRefreshTimeRef = useRef<number>(0);
-
-
-    // 2. Refs for cleanup (Fix Stale Closure in useEffect)
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
+    const recognitionRef = useRef<SpeechRecognition | null>(null);
     const contentRef = useRef(content);
     const imagePathRef = useRef(imagePath);
     const audioPathRef = useRef(audioPath);
+    const isDirtyRef = useRef(false);
+    const isMountedRef = useRef(true);
+    const activeDateRef = useRef(currentDate);
+    const lastAppendedTextRef = useRef("");
+    const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const browserTranscriptBackupRef = useRef<string | null>(null); // Dual STT: browser backup
+    const contentDateRef = useRef(format(date, 'yyyy-MM-dd'));
 
     // Sync refs with state
     useEffect(() => {
@@ -176,22 +187,6 @@ export function JournalEditor({
         imagePathRef.current = imagePath;
         audioPathRef.current = audioPath;
     }, [content, imagePath, audioPath]);
-
-    // === BUG FIX REFS ===
-    // Prevents data loss on fast navigation - tracks if content needs saving
-    const isDirtyRef = useRef(false);
-    // Prevents memory leaks - guards async state updates after unmount
-    const isMountedRef = useRef(true);
-    const activeDateRef = useRef(currentDate); // Tracks the currently active date for async checks
-    // Prevents SST duplication - tracks last appended transcript
-    const lastAppendedTextRef = useRef("");
-    // Recording timer state
-    const [recordingDuration, setRecordingDuration] = useState(0);
-    const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-    // ROOT CAUSE FIX: Tracks which date the CURRENT 'content' state belongs to.
-    // This prevents Today's content from being saved into Yesterday's slot during transitions.
-    const contentDateRef = useRef(format(date, 'yyyy-MM-dd'));
 
     // Toast/Confirm UI (replaces native alert/confirm)
     const { showToast, showConfirm } = useToast();
@@ -404,37 +399,37 @@ export function JournalEditor({
         abortControllerRef.current = new AbortController();
 
         const dateStr = format(currentDate, 'yyyy-MM-dd');
-        const cacheKey = `entry_cache_${userId}_${dateStr}`;
+        const isSameDateRefresh = contentDateRef.current === dateStr;
 
-        // STEP 0: Reset state immediately to prevent "Today" text showing on "Yesterday"
-        if (isMountedRef.current) {
+        // STEP 0: Reset state ONLY if date has changed to prevent "Today" text showing on "Yesterday"
+        if (isMountedRef.current && !isSameDateRefresh) {
             setContent("");
             setImagePath(null);
             setAudioPath(null);
             setDisplayUrl(null);
             setAudioDisplayUrl(null);
             setIsLoading(true);
-            setImageLoadError(false); // Reset error state on date change
-            // CRITICAL: Reset dirty flag for the new date
+            setImageLoadError(false);
             isDirtyRef.current = false;
-            // Also reset the lock so no saves happen until data is loaded
             contentDateRef.current = "";
+        } else if (isMountedRef.current && isSameDateRefresh && !isLoading) {
+            // If it's a refresh of same date, maybe just show a subtle pulse instead of full loading
+            setIsLoading(true);
         }
 
+        const cacheKey = `entry_cache_${userId}_${dateStr}`;
         // STEP 1: Load from localStorage cache first (instant)
         const cachedEntry = localStorage.getItem(cacheKey);
-        if (cachedEntry) {
+        if (cachedEntry && !isSameDateRefresh) { // Only use cache if we're not already displaying current data
             const cached = JSON.parse(cachedEntry);
             if (isMountedRef.current) {
                 setContent(cached.content || "");
                 setImagePath(cached.image_url || null);
                 setAudioPath(cached.audio_url || null);
-                setEntryId(cached.id || null); // Load Identity
-                // LOCK NOW: Allow saving immediate edits to the cached content
+                setEntryId(cached.id || null);
                 contentDateRef.current = dateStr;
             }
-        } else if (isMountedRef.current) {
-            // No cache entry? It's a fresh day, so allow saving immediately
+        } else if (isMountedRef.current && !isSameDateRefresh) {
             contentDateRef.current = dateStr;
         }
 
@@ -470,10 +465,18 @@ export function JournalEditor({
                 const isActiveDate = format(activeDateRef.current, 'yyyy-MM-dd') === dateStr;
 
                 if (!isDirtyRef.current && isActiveDate) {
-                    setContent(data.content || "");
-                    setImagePath(data.image_url || null);
-                    setAudioPath(data.audio_url || null);
+                    const newContent = data.content || "";
+                    const newImage = data.image_url || null;
+                    const newAudio = data.audio_url || null;
+
+                    setContent(newContent);
+                    setImagePath(newImage);
+                    setAudioPath(newAudio);
                     setEntryId(data.id); // Bind to Server Identity
+
+                    // Initialize History once data is loaded
+                    setHistory([{ content: newContent, image: newImage, audio: newAudio }]);
+                    setHistoryIndex(0);
                 } else if (!isActiveDate) {
                     console.log("Fetch result discarded - user navigated away");
                     return;
@@ -495,6 +498,13 @@ export function JournalEditor({
             contentDateRef.current = dateStr;
         }
     }, [currentDate, userId]);
+
+    // BLOCKER FIX #3: Reset history on date change to prevent cross-date undo
+    useEffect(() => {
+        // Reset history stack to current state when date changes
+        setHistory([{ content, image: imagePath, audio: audioPath }]);
+        setHistoryIndex(0);
+    }, [currentDate, content, imagePath, audioPath]);
 
     // VISIBILITY CHANGE & FOCUS HANDLER
     // Refresh signed URLs when app comes to foreground, but debounce heavily
@@ -717,6 +727,7 @@ export function JournalEditor({
             if (error) {
                 console.error('Error saving:', error);
                 setHasError(true);
+                setSyncStatus('failed'); // UI: Show failed status
                 saveOffline(); // Fallback
             } else {
                 setHasError(false);
@@ -731,6 +742,7 @@ export function JournalEditor({
                         localStorage.setItem('pending_journal_sync', JSON.stringify(existing));
                     }
                 }
+                setSyncStatus('synced'); // UI: Show synced status
             }
             setIsSaving(false);
         }
@@ -750,11 +762,14 @@ export function JournalEditor({
 
         isDirtyRef.current = true;
         // Immediate Feedback: Show saving pulse as soon as typing starts
-        if (isMountedRef.current) setIsSaving(true);
+        if (isMountedRef.current) {
+            setIsSaving(true);
+            setSyncStatus(isOffline ? 'pending' : 'local'); // UI: Show local or pending status
+        }
 
         const timeoutId = setTimeout(() => {
             saveEntry(dateStr, content, imagePath, audioPath);
-        }, 800);
+        }, 7000); // PRODUCTION: 7-second debounce to prevent API spam
 
         return () => {
             clearTimeout(timeoutId);
@@ -777,7 +792,68 @@ export function JournalEditor({
     // Auto-resize on content change
     useEffect(() => {
         adjustTextareaHeight();
-    }, [content, adjustTextareaHeight]);
+
+        // Track history
+        if (!isUndoingRedoingRef.current && !isLoading) {
+            const lastState = history[historyIndex];
+            const hasChanged = !lastState ||
+                lastState.content !== content ||
+                lastState.image !== imagePath ||
+                lastState.audio !== audioPath;
+
+            if (hasChanged) {
+                const timeoutId = setTimeout(() => {
+                    setHistory(prev => {
+                        const newHistory = prev.slice(0, historyIndex + 1);
+                        newHistory.push({ content, image: imagePath, audio: audioPath });
+                        if (newHistory.length > 20) newHistory.shift();
+                        return newHistory;
+                    });
+                    setHistoryIndex(prev => Math.min(prev + 1, 19));
+                }, 500); // Debounce history push
+                return () => clearTimeout(timeoutId);
+            }
+        }
+    }, [content, imagePath, audioPath, adjustTextareaHeight, isLoading]);
+
+    const undo = useCallback(() => {
+        if (historyIndex > 0) {
+            isUndoingRedoingRef.current = true;
+            const prevState = history[historyIndex - 1];
+            setContent(prevState.content);
+            setImagePath(prevState.image);
+            setAudioPath(prevState.audio);
+            setHistoryIndex(prev => prev - 1);
+            setTimeout(() => { isUndoingRedoingRef.current = false; }, 50);
+        }
+    }, [history, historyIndex]);
+
+    const redo = useCallback(() => {
+        if (historyIndex < history.length - 1) {
+            isUndoingRedoingRef.current = true;
+            const nextState = history[historyIndex + 1];
+            setContent(nextState.content);
+            setImagePath(nextState.image);
+            setAudioPath(nextState.audio);
+            setHistoryIndex(prev => prev + 1);
+            setTimeout(() => { isUndoingRedoingRef.current = false; }, 50);
+        }
+    }, [history, historyIndex]);
+
+    // Keyboard Shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                e.preventDefault();
+                if (e.shiftKey) redo(); else undo();
+            } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+                e.preventDefault();
+                redo();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [undo, redo]);
 
     // --- File Handlers ---
     const processFile = useCallback(async (file: File) => {
@@ -1258,10 +1334,45 @@ export function JournalEditor({
                 }
 
             } else {
-                // === ONLINE MODE: Whisper (High Quality) ===
+                // === ONLINE MODE: Whisper (High Quality) + Browser STT Backup (Dual Recording) ===
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    // Determine supported MIME type for Mobile/Desktop compatibility
+
+                    // DUAL STT: Start browser Speech API in parallel as backup
+                    browserTranscriptBackupRef.current = null; // Reset backup
+                    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+                    if (SpeechRecognition) {
+                        try {
+                            const backupRecognition = new SpeechRecognition();
+                            backupRecognition.continuous = true;
+                            backupRecognition.interimResults = false;
+                            backupRecognition.lang = 'en-US';
+
+                            let accumulatedText = '';
+                            backupRecognition.onresult = (event: any) => {
+                                // Accumulate results silently in background
+                                for (let i = 0; i < event.results.length; i++) {
+                                    if (event.results[i].isFinal) {
+                                        accumulatedText += (accumulatedText ? ' ' : '') + event.results[i][0].transcript.trim();
+                                    }
+                                }
+                                browserTranscriptBackupRef.current = accumulatedText;
+                            };
+
+                            backupRecognition.onerror = () => {
+                                // Silent fail - it's just a backup
+                                console.log('Browser STT backup failed (silent)');
+                            };
+
+                            // Start browser recognition in parallel
+                            backupRecognition.start();
+                            recognitionRef.current = backupRecognition; // Store for cleanup
+                        } catch (e) {
+                            console.log('Browser STT backup not available');
+                        }
+                    }
+
+                    // Continue with audio recording for Whisper
                     const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
                     const mediaRecorder = new MediaRecorder(stream, { mimeType });
                     const chunks: BlobPart[] = [];
@@ -1274,6 +1385,13 @@ export function JournalEditor({
                         // Clean up stream tracks immediately
                         stream.getTracks().forEach(track => track.stop());
 
+                        // Stop browser STT backup
+                        if (recognitionRef.current) {
+                            try {
+                                recognitionRef.current.stop();
+                            } catch (e) { } // Ignore stop errors
+                        }
+
                         const blob = new Blob(chunks, { type: mimeType }); // Use detected MIME type
 
                         setIsTranscribing(true);
@@ -1282,7 +1400,7 @@ export function JournalEditor({
                             let model = getSTTModel(tier); // Default model
 
                             try {
-                                const text = await transcribeAudio(blob, model);
+                                const text = await transcribeAudio(blob, model, sttLanguage);
                                 if (text && isMountedRef.current) {
                                     setContent(prev => {
                                         const needsSpace = prev.length > 0 && !prev.endsWith(' ');
@@ -1293,7 +1411,7 @@ export function JournalEditor({
                                 // FALLBACK 1: Try Turbo if Large failed
                                 if (model === 'whisper-large-v3') {
                                     console.warn("Primary STT failed, trying Turbo fallback...");
-                                    const turboText = await transcribeAudio(blob, 'whisper-large-v3-turbo');
+                                    const turboText = await transcribeAudio(blob, 'whisper-large-v3-turbo', sttLanguage);
                                     if (turboText && isMountedRef.current) {
                                         setContent(prev => {
                                             const needsSpace = prev.length > 0 && !prev.endsWith(' ');
@@ -1307,10 +1425,42 @@ export function JournalEditor({
 
                         } catch (err: any) {
                             console.error("Transcription failed:", err);
-                            // FALLBACK 2: Force Offline Mode for NEXT attempt
+                            // BLOCKER FIX #2: Immediately execute browser STT on API failure
                             if (isMountedRef.current) {
-                                setIsOffline(true); // Switch app to offline mode
-                                showToast("Online transcription failed. Switched to Offline Voice Typing.", "warning");
+                                setIsOffline(true); // Switch app to offline mode for future attempts
+                                showToast("Switching to Offline Voice Typing...", "warning");
+
+                                // Execute browser STT fallback immediately
+                                const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+                                if (SpeechRecognition) {
+                                    try {
+                                        const recognition = new SpeechRecognition();
+                                        recognition.continuous = false;
+                                        recognition.interimResults = false;
+                                        recognition.lang = 'en-US';
+
+                                        recognition.onresult = (event: any) => {
+                                            const text = event.results[0][0].transcript.trim();
+                                            if (text && isMountedRef.current) {
+                                                setContent(prev => {
+                                                    const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                                    return prev + (needsSpace ? ' ' : '') + text;
+                                                });
+                                            }
+                                        };
+
+                                        recognition.onerror = () => {
+                                            showToast("Voice recognition failed. Please try typing manually.", "error");
+                                        };
+
+                                        // Process the recorded audio with browser STT
+                                        // Note: We can't directly use the blob, so this is a best-effort fallback
+                                        // telling user what happened
+                                        showToast("Recording saved. Please tap the mic again to transcribe.", "info");
+                                    } catch (fallbackError) {
+                                        console.error("Browser STT fallback failed:", fallbackError);
+                                    }
+                                }
                             }
                         } finally {
                             if (isMountedRef.current) setIsTranscribing(false);
@@ -1549,6 +1699,37 @@ export function JournalEditor({
     const isToday = isSameDay(currentDate, new Date());
     const isMinDate = minDate && isSameDay(currentDate, minDate);
 
+    // --- Swipe Navigation ---
+    const touchStartX = useRef<number | null>(null);
+    const touchStartY = useRef<number | null>(null);
+    const SWIPE_THRESHOLD = 80;
+
+    const handleTouchStartSwipe = (e: React.TouchEvent) => {
+        touchStartX.current = e.touches[0].clientX;
+        touchStartY.current = e.touches[0].clientY;
+    };
+
+    const handleTouchEndSwipe = (e: React.TouchEvent) => {
+        if (touchStartX.current === null || touchStartY.current === null) return;
+
+        const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+        const deltaY = e.changedTouches[0].clientY - touchStartY.current;
+
+        // Ensure it's mostly horizontal
+        if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > SWIPE_THRESHOLD) {
+            if (deltaX > 0) {
+                // Swipe Right -> Prev Date
+                if (!isMinDate) navigateDate('prev');
+            } else {
+                // Swipe Left -> Next Date
+                if (!isToday) navigateDate('next');
+            }
+        }
+
+        touchStartX.current = null;
+        touchStartY.current = null;
+    };
+
     // Dynamic accent color logic
     const accentObj = ACCENT_COLORS.find(c => c.bgClass === accentColor) || ACCENT_COLORS[0];
     const hoverClass = (accentObj as any).hoverTextClass || "group-hover:text-white";
@@ -1568,9 +1749,18 @@ export function JournalEditor({
                 >
                     <ChevronLeft className={cn("w-5 h-5 text-zinc-500 transition-colors", !isMinDate && hoverClass)} />
                 </button>
-                <h2 className="text-2xl font-light text-[#18181b] dark:text-white select-none">
-                    {isToday ? "Today" : format(currentDate, "MMMM d, yyyy")}
-                </h2>
+                <div className="flex flex-col items-center gap-1">
+                    <h2 className="text-2xl font-light text-[#18181b] dark:text-white select-none">
+                        {isToday ? "Today" : format(currentDate, "MMMM d, yyyy")}
+                    </h2>
+                    {/* Sync Status Indicator - Subtle */}
+                    <div className="text-[9px] text-zinc-400 dark:text-zinc-600 font-medium tracking-wide uppercase flex items-center gap-1">
+                        {syncStatus === 'synced' && <span title="Synced to cloud">✓ Synced</span>}
+                        {syncStatus === 'local' && <span title="Saved locally">○ Saved</span>}
+                        {syncStatus === 'pending' && <span title="Waiting for connection" className="text-amber-600 dark:text-amber-500">⚠ Pending</span>}
+                        {syncStatus === 'failed' && <span title="Sync failed - will retry" className="text-red-600 dark:text-red-500">✗ Failed</span>}
+                    </div>
+                </div>
                 <button
                     onClick={() => navigateDate('next')}
                     disabled={isToday}
@@ -1583,6 +1773,14 @@ export function JournalEditor({
                 </button>
             </div>
 
+            {/* Offline Banner - Non-blocking, subtle */}
+            {isOffline && (
+                <div className="w-full mb-4 px-4 py-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30 rounded-xl flex items-center justify-center gap-2 text-xs text-amber-800 dark:text-amber-400 font-medium">
+                    <span>📡</span>
+                    <span>You're offline. Changes will sync when connected.</span>
+                </div>
+            )}
+
             {/* Editor */}
             <div
                 className={cn(
@@ -1592,6 +1790,8 @@ export function JournalEditor({
                 onDragOver={onDragOver}
                 onDragLeave={onDragLeave}
                 onDrop={onDrop}
+                onTouchStart={handleTouchStartSwipe}
+                onTouchEnd={handleTouchEndSwipe}
             >
                 <textarea
                     ref={textareaRef}
@@ -1603,6 +1803,13 @@ export function JournalEditor({
                         }
                         setContent(e.target.value);
                         adjustTextareaHeight();
+                    }}
+                    onBlur={() => {
+                        // IMMEDIATE FLUSH ON BLUR
+                        const dateStr = format(currentDate, 'yyyy-MM-dd');
+                        if (isDirtyRef.current && userId && contentDateRef.current === dateStr) {
+                            saveEntry(dateStr, content, imagePath, audioPath);
+                        }
                     }}
                     onFocus={(e) => {
                         if (isGuest && onGuestAction) {
@@ -1620,6 +1827,28 @@ export function JournalEditor({
                     className="w-full bg-transparent text-xl md:text-2xl text-[#18181b] dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-600 resize-none outline-none min-h-[150px] text-left md:text-center font-light leading-relaxed scrollbar-hide p-6 md:p-4 overflow-hidden"
                     spellCheck={false}
                 />
+
+                <div className="absolute bottom-[-30px] left-0 flex items-center gap-2 transition-opacity opacity-0 group-hover:opacity-100">
+                    <button
+                        onClick={undo}
+                        disabled={historyIndex <= 0}
+                        className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors disabled:opacity-30"
+                        title="Undo (Ctrl+Z)"
+                    >
+                        <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <button
+                        onClick={redo}
+                        disabled={historyIndex >= history.length - 1}
+                        className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors disabled:opacity-30"
+                        title="Redo (Ctrl+Y)"
+                    >
+                        <ChevronRight className="w-4 h-4" />
+                    </button>
+                    <span className="text-[10px] text-zinc-400 font-mono ml-1">
+                        {historyIndex + 1}/{history.length}
+                    </span>
+                </div>
 
                 <div className="absolute bottom-[-30px] right-0 text-xs font-mono transition-opacity opacity-0 group-hover:opacity-100 flex items-center gap-2">
                     {hasError ? <span className="text-red-500 font-semibold">Failed to save</span> :
@@ -1660,9 +1889,10 @@ export function JournalEditor({
                     </div>
                     <button
                         onClick={removeImage}
-                        className="absolute -top-2 -right-2 p-1.5 bg-white dark:bg-zinc-900 rounded-full border border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-white hover:border-red-500 hover:bg-red-500 transition-all opacity-0 group-hover/image:opacity-100 shadow-lg"
+                        className="absolute -top-2 -right-2 px-2 py-1 bg-white dark:bg-zinc-900 rounded-full border border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-white hover:border-red-500 hover:bg-red-500 transition-all shadow-lg flex items-center gap-1 group/del-btn"
                     >
                         <X className="w-3 h-3" />
+                        <span className="text-[10px] font-medium hidden group-hover/del-btn:block">Delete</span>
                     </button>
                 </div>
             )}

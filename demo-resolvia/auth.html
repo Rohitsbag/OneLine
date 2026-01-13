@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign In | OneLine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script>
+        tailwind.config = { darkMode: 'class', theme: { extend: { fontFamily: { sans: ['Inter', 'sans-serif'], } } } }
+    </script>
+</head>
+
+<body class="bg-[#050505] text-zinc-50 flex items-center justify-center min-h-screen p-6">
+
+    <a href="index.html"
+        class="absolute top-8 left-8 text-zinc-500 hover:text-white flex items-center gap-2 transition-colors">
+        <i data-lucide="arrow-left" class="w-4 h-4"></i>Back
+    </a>
+
+    <div class="auth-container page-enter">
+        <div class="text-center mb-10">
+            <i data-lucide="sparkles" class="w-10 h-10 text-white mx-auto mb-4"></i>
+            <h1 id="auth-title" class="text-3xl font-semibold mb-2">Welcome back</h1>
+            <p id="auth-subtitle" class="text-zinc-500">Enter your details to continue</p>
+        </div>
+
+        <div class="glass rounded-3xl p-8 backdrop-blur-md">
+            <form id="auth-form" class="space-y-4" onsubmit="event.preventDefault(); window.location.href='app.html'">
+                <input type="email" placeholder="Email"
+                    class="w-full bg-black/40 border border-zinc-800 py-3 px-4 rounded-xl text-white focus:outline-none focus:border-white/20 transition-colors"
+                    required>
+                <div class="relative">
+                    <input id="password-input" type="password" placeholder="Password"
+                        class="w-full bg-black/40 border border-zinc-800 py-3 px-4 rounded-xl text-white focus:outline-none focus:border-white/20 transition-colors pr-12"
+                        required>
+                    <button type="button"
+                        onclick="const p = document.getElementById('password-input'); p.type = p.type === 'password' ? 'text' : 'password';"
+                        class="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400">
+                        <i data-lucide="eye" class="w-5 h-5"></i>
+                    </button>
+                </div>
+                <button type="submit"
+                    class="w-full bg-white text-black font-semibold h-12 rounded-xl hover:bg-zinc-200 transition-transform active:scale-95 shadow-xl">
+                    Sign In
+                </button>
+                <button type="button" id="forgot-btn"
+                    class="w-full text-sm text-zinc-500 hover:text-white transition-colors">Forgot Password?</button>
+            </form>
+
+            <div class="mt-8 text-center">
+                <button id="mode-toggle" class="text-sm text-zinc-500 hover:text-white transition-colors">Don't have an
+                    account? Sign up</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const title = document.getElementById('auth-title');
+            const sub = document.getElementById('auth-subtitle');
+            const toggle = document.getElementById('mode-toggle');
+            const forgot = document.getElementById('forgot-btn');
+            const submit = document.querySelector('button[type="submit"]');
+            let isSignUp = false;
+
+            toggle.addEventListener('click', () => {
+                isSignUp = !isSignUp;
+                title.textContent = isSignUp ? 'Create an account' : 'Welcome back';
+                sub.textContent = isSignUp ? 'Start your journey with OneLine' : 'Enter your details to continue';
+                toggle.textContent = isSignUp ? 'Already have an account? Sign in' : "Don't have an account? Sign up";
+                submit.textContent = isSignUp ? 'Sign Up' : 'Sign In';
+                forgot.style.display = isSignUp ? 'none' : 'block';
+            });
+        });
+    </script>
+</body>
+
+</html>

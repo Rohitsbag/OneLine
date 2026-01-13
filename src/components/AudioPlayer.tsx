@@ -141,10 +141,11 @@ export function AudioPlayer({ src, onDelete, accentColor = "bg-indigo-500" }: Au
             {onDelete && (
                 <button
                     onClick={onDelete}
-                    className="absolute -top-1 -right-1 p-1 bg-white dark:bg-zinc-900 rounded-full border border-zinc-200 dark:border-zinc-800 text-zinc-400 dark:text-zinc-500 hover:text-white hover:border-red-500 hover:bg-red-500 transition-all opacity-0 group-hover/audio:opacity-100 shadow-sm"
+                    className="absolute -top-1 -right-1 px-2 py-1 bg-white dark:bg-zinc-900 rounded-full border border-zinc-200 dark:border-zinc-800 text-zinc-400 dark:text-zinc-500 hover:text-white hover:border-red-500 hover:bg-red-500 transition-all shadow-sm flex items-center gap-1 group/audio-del"
                     title="Delete voice note"
                 >
                     <X className="w-3 h-3" />
+                    <span className="text-[10px] font-medium hidden group-hover/audio-del:block">Delete</span>
                 </button>
             )}
         </div>

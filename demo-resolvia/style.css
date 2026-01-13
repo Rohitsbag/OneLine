@@ -1,0 +1,118 @@
+/* Custom Styles for OneLine Demo */
+body {
+    background-color: #050505;
+    color: #f4f4f5;
+    font-family: 'Inter', sans-serif;
+    overflow-x: hidden;
+}
+
+.fade-in {
+    opacity: 0;
+    transform: translateY(16px);
+    transition: all 0.7s ease-out;
+}
+
+.fade-in.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.scrollbar-subtle::-webkit-scrollbar {
+    width: 2px;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb {
+    background-color: #3f3f46;
+    border-radius: 9999px;
+}
+
+.perspective-1000 {
+    perspective: 1000px;
+}
+
+@keyframes rise {
+    from {
+        transform: translateY(100%);
+    }
+
+    to {
+        transform: translateY(0);
+    }
+}
+
+.rise-anim {
+    animation: rise 1s forwards;
+}
+
+/* Spotlight effect variables */
+.spotlight-card {
+    --mouse-x: 0px;
+    --mouse-y: 0px;
+}
+
+.spotlight-card::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    background: radial-gradient(600px circle at var(--mouse-x) var(--mouse-y), rgba(255, 255, 255, 0.1), transparent 40%);
+    opacity: 0;
+    transition: opacity 0.5s;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.spotlight-card:hover::before {
+    opacity: 1;
+}
+
+/* Glassmorphism */
+.glass {
+    background: rgba(24, 24, 27, 0.4);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Transitions */
+.page-enter {
+    animation: page-enter 0.5s ease-out forwards;
+}
+
+@keyframes page-enter {
+    from {
+        opacity: 0;
+        transform: scale(0.98) translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+/* Auth Specific */
+.auth-container {
+    max-width: 450px;
+    width: 100%;
+}
+
+/* App Specific */
+.sidebar {
+    width: 280px;
+    transition: transform 0.3s ease;
+}
+
+@media (max-width: 768px) {
+    .sidebar {
+        transform: translateX(-100%);
+        position: absolute;
+    }
+
+    .sidebar.open {
+        transform: translateX(0);
+    }
+}

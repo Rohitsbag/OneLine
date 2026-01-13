@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { Header } from "@/components/Header";
 import { JournalEditor } from "@/components/JournalEditor";
+import { TimelineView } from "@/components/TimelineView";
+import { PinLock } from "@/components/PinLock";
 import { cn } from "@/lib/utils";
 import { WeeklyReflection } from "@/components/WeeklyReflection";
 import { CalendarOverlay } from "@/components/CalendarOverlay";
@@ -8,12 +10,21 @@ import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { supabase } from "@/utils/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { SignInModal } from "@/components/SignInModal";
+import { Capacitor } from "@capacitor/core";
 
 export function JournalPage() {
     const [showCalendar, setShowCalendar] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
+    const [showTimeline, setShowTimeline] = useState(false);
     const [selectedDate, setSelectedDate] = useState(new Date());
+    const [userId, setUserId] = useState<string | null>(null);
     const [aiEnabled, setAiEnabled] = useState(true);
+    const [sttLanguage, setSttLanguage] = useState("Auto");
+    const [lockEnabled, setLockEnabled] = useState(false);
+    const [isLocked, setIsLocked] = useState(false);
+    const [pinCode, setPinCode] = useState<string | null>(null);
+    const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+    const [notificationTime, setNotificationTime] = useState("20:00");
     const [accentColor, setAccentColor] = useState("bg-indigo-500");
     const [refreshTrigger, setRefreshTrigger] = useState(0);
     const [pullProgress, setPullProgress] = useState(0);
@@ -80,6 +91,7 @@ export function JournalPage() {
                         created_at: user.created_at
                     }));
                     cachedUser = user;
+                    setUserId(user.id);
                 } else if (!cachedUser) {
                     // No session and no cache = guest mode
                     setIsGuest(true);
@@ -95,9 +107,32 @@ export function JournalPage() {
                     setIsLoadingAuth(false);
                     return;
                 }
+                setUserId(cachedUser.id);
             }
 
-            // 1. Set Min Date (Account Creation)
+            // Load user settings
+            if (cachedUser) {
+                const { data: settings } = await supabase
+                    .from('user_settings')
+                    .select('*')
+                    .eq('user_id', cachedUser.id)
+                    .single();
+
+                if (settings) {
+                    if (settings.ai_enabled !== undefined) setAiEnabled(settings.ai_enabled);
+                    if (settings.accent_color) setAccentColor(settings.accent_color);
+                    if (settings.stt_language) setSttLanguage(settings.stt_language);
+                    if (settings.notifications_enabled !== undefined) setNotificationsEnabled(settings.notifications_enabled);
+                    if (settings.notification_time) setNotificationTime(settings.notification_time);
+                    if (settings.pin_code) setPinCode(settings.pin_code);
+                    if (settings.lock_enabled && Capacitor.isNativePlatform()) {
+                        setLockEnabled(true);
+                        setIsLocked(true); // Lock initially if enabled and on native
+                    } else if (settings.lock_enabled) {
+                        setLockEnabled(true); // Still enable the state so settings show correctly, but don't lock web
+                    }
+                }
+            }
             if (cachedUser?.created_at) {
                 setMinDate(new Date(cachedUser.created_at));
             }
@@ -162,7 +197,18 @@ export function JournalPage() {
         });
     }, [isDark]);
 
-    // AI Toggle Persistence
+    const updateSetting = async (key: string, value: any) => {
+        if (!userId) return;
+        const { error } = await supabase
+            .from('user_settings')
+            .upsert({
+                user_id: userId,
+                [key]: value,
+                updated_at: new Date().toISOString()
+            });
+        if (error) console.error(`Error updating ${key}:`, error);
+    };
+
     const toggleAi = async (enabled: boolean) => {
         setAiEnabled(enabled);
         updateSetting('ai_enabled', enabled);
@@ -173,14 +219,40 @@ export function JournalPage() {
         updateSetting('accent_color', colorClass);
     };
 
-    const updateSetting = async (key: string, value: any) => {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-            await supabase.from('user_settings').upsert({
-                user_id: user.id,
-                [key]: value,
-                updated_at: new Date().toISOString()
-            });
+    // Notification Scheduling
+    const scheduleNotifications = async (enabled: boolean, timeStr?: string) => {
+        try {
+            const { LocalNotifications } = await import('@capacitor/local-notifications');
+
+            // Always cancel existing ones first
+            await LocalNotifications.cancel({ notifications: [{ id: 1 }] });
+
+            if (enabled) {
+                const targetTime = timeStr || notificationTime;
+                const [hour, minute] = targetTime.split(':').map(Number);
+                const permission = await LocalNotifications.requestPermissions();
+                if (permission.display === 'granted') {
+                    await LocalNotifications.schedule({
+                        notifications: [
+                            {
+                                id: 1,
+                                title: "Time for your OneLine",
+                                body: "Capture your thought for today.",
+                                schedule: {
+                                    allowWhileIdle: true,
+                                    every: 'day',
+                                    on: { hour, minute }
+                                },
+                                smallIcon: "ic_stat_oneline",
+                                actionTypeId: "",
+                                extra: null
+                            }
+                        ]
+                    });
+                }
+            }
+        } catch (e) {
+            console.error("Local Notifications error:", e);
         }
     };
 
@@ -234,6 +306,10 @@ export function JournalPage() {
         );
     }
 
+    if (isLocked && lockEnabled && Capacitor.isNativePlatform()) {
+        return <PinLock onUnlock={() => setIsLocked(false)} accentColor={accentColor} storedPin={pinCode} />;
+    }
+
     return (
         <div className="flex min-h-screen flex-col items-center w-full font-sans animate-in fade-in duration-700">
             <Header
@@ -245,6 +321,7 @@ export function JournalPage() {
                     }
                     setShowSettings(true);
                 }}
+                onOpenTimeline={() => setShowTimeline(true)}
                 isDark={isDark}
                 toggleTheme={() => setIsDark(!isDark)}
                 accentColor={accentColor}
@@ -289,6 +366,7 @@ export function JournalPage() {
                     isGuest={isGuest}
                     onGuestAction={() => setShowAuthModal(true)}
                     refreshTrigger={refreshTrigger}
+                    sttLanguage={sttLanguage}
                 />
 
                 {aiEnabled && (
@@ -319,7 +397,49 @@ export function JournalPage() {
                 onToggleAi={toggleAi}
                 accentColor={accentColor}
                 onAccentChange={updateAccentColor}
+                sttLanguage={sttLanguage}
+                onLanguageChange={(lang: string) => {
+                    setSttLanguage(lang);
+                    updateSetting('stt_language', lang);
+                }}
+                lockEnabled={lockEnabled}
+                onToggleLock={(enabled) => {
+                    setLockEnabled(enabled);
+                    updateSetting('lock_enabled', enabled);
+                }}
+                notificationsEnabled={notificationsEnabled}
+                onToggleNotifications={(enabled) => {
+                    setNotificationsEnabled(enabled);
+                    updateSetting('notifications_enabled', enabled);
+                    scheduleNotifications(enabled);
+                }}
+                notificationTime={notificationTime}
+                onTimeChange={(time) => {
+                    setNotificationTime(time);
+                    updateSetting('notification_time', time);
+                    if (notificationsEnabled) {
+                        scheduleNotifications(true, time);
+                    }
+                }}
+                pinCode={pinCode}
+                onPinChange={(val) => {
+                    setPinCode(val);
+                    if (val.length >= 4) {
+                        updateSetting('pin_code', val);
+                    }
+                }}
             />
+
+            {userId && (
+                <TimelineView
+                    userId={userId}
+                    currentDate={selectedDate}
+                    onDateSelect={setSelectedDate}
+                    onClose={() => setShowTimeline(false)}
+                    isOpen={showTimeline}
+                    accentColor={accentColor}
+                />
+            )}
 
             <SignInModal
                 isOpen={showAuthModal}

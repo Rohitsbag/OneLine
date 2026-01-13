@@ -17,6 +17,21 @@
       }
     })();
   </script>
+  <script>
+    // Suppress WebSocket errors from browser extensions (runs ASAP, covers all console methods)
+    (function () {
+      ['error', 'warn', 'log'].forEach(method => {
+        const original = console[method];
+        console[method] = function (...args) {
+          const message = args.join(' ');
+          if (message.includes('WebSocket connection') && message.includes('failed')) {
+            return; // Suppress browser extension WebSocket errors
+          }
+          original.apply(console, args);
+        };
+      });
+    })();
+  </script>
 </head>
 
 <body>

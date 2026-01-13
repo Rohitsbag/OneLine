@@ -7,6 +7,11 @@ import path from 'path'
 // https://vitejs.dev/config/
 export default defineConfig({
     plugins: [react()],
+    server: {
+        hmr: {
+            overlay: false // Suppress HMR error overlay
+        }
+    },
     resolve: {
         alias: {
             "@": path.resolve(__dirname, "./src"),
