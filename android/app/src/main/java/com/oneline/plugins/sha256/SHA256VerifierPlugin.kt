@@ -60,7 +60,7 @@ class SHA256VerifierPlugin : Plugin() {
         
         try {
             while (fis.read(buffer).also { bytesRead = it } != -1) {
-                if (!kotlinx.coroutines.isActive) {
+                if (!coroutineContext.isActive) {
                     throw Exception("SHA-256 computation cancelled")
                 }
                 
