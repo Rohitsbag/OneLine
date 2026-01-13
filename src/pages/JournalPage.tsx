@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { Header } from "@/components/Header";
 import { JournalEditor } from "@/components/JournalEditor";
 import { TimelineView } from "@/components/TimelineView";
-import { PinLock } from "@/components/PinLock";
 import { cn } from "@/lib/utils";
 import { WeeklyReflection } from "@/components/WeeklyReflection";
 import { CalendarOverlay } from "@/components/CalendarOverlay";
@@ -10,9 +9,15 @@ import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { supabase } from "@/utils/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { SignInModal } from "@/components/SignInModal";
-import { Capacitor } from "@capacitor/core";
 
-export function JournalPage() {
+interface JournalPageProps {
+    externalPinCode?: string | null;
+    externalLockEnabled?: boolean;
+    onPinChange?: (pin: string) => void;
+    onLockToggle?: (enabled: boolean) => void;
+}
+
+export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange, onLockToggle }: JournalPageProps) {
     const [showCalendar, setShowCalendar] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [showTimeline, setShowTimeline] = useState(false);
@@ -20,9 +25,6 @@ export function JournalPage() {
     const [userId, setUserId] = useState<string | null>(null);
     const [aiEnabled, setAiEnabled] = useState(true);
     const [sttLanguage, setSttLanguage] = useState("Auto");
-    const [lockEnabled, setLockEnabled] = useState(false);
-    const [isLocked, setIsLocked] = useState(false);
-    const [pinCode, setPinCode] = useState<string | null>(null);
     const [notificationsEnabled, setNotificationsEnabled] = useState(false);
     const [notificationTime, setNotificationTime] = useState("20:00");
     const [accentColor, setAccentColor] = useState("bg-indigo-500");
@@ -31,6 +33,8 @@ export function JournalPage() {
     const [isPulling, setIsPulling] = useState(false);
     const startY = useRef<number | null>(null);
     const PULL_THRESHOLD = 120;
+
+    // Note: isLocked is handled globally in App.tsx now
 
     const [isDark, setIsDark] = useState(() => {
         if (typeof window !== 'undefined') {
@@ -124,13 +128,11 @@ export function JournalPage() {
                     if (settings.stt_language) setSttLanguage(settings.stt_language);
                     if (settings.notifications_enabled !== undefined) setNotificationsEnabled(settings.notifications_enabled);
                     if (settings.notification_time) setNotificationTime(settings.notification_time);
-                    if (settings.pin_code) setPinCode(settings.pin_code);
-                    if (settings.lock_enabled && Capacitor.isNativePlatform()) {
-                        setLockEnabled(true);
-                        setIsLocked(true); // Lock initially if enabled and on native
-                    } else if (settings.lock_enabled) {
-                        setLockEnabled(true); // Still enable the state so settings show correctly, but don't lock web
-                    }
+                    if (settings.stt_language) setSttLanguage(settings.stt_language);
+                    if (settings.notifications_enabled !== undefined) setNotificationsEnabled(settings.notifications_enabled);
+                    if (settings.notification_time) setNotificationTime(settings.notification_time);
+
+                    // PIN/Lock logic moved to App.tsx
                 }
             }
             if (cachedUser?.created_at) {
@@ -306,9 +308,7 @@ export function JournalPage() {
         );
     }
 
-    if (isLocked && lockEnabled && Capacitor.isNativePlatform()) {
-        return <PinLock onUnlock={() => setIsLocked(false)} accentColor={accentColor} storedPin={pinCode} />;
-    }
+    // Global PinLock is handled in App.tsx
 
     return (
         <div className="flex min-h-screen flex-col items-center w-full font-sans animate-in fade-in duration-700">
@@ -402,9 +402,9 @@ export function JournalPage() {
                     setSttLanguage(lang);
                     updateSetting('stt_language', lang);
                 }}
-                lockEnabled={lockEnabled}
+                lockEnabled={externalLockEnabled}
                 onToggleLock={(enabled) => {
-                    setLockEnabled(enabled);
+                    onLockToggle?.(enabled);
                     updateSetting('lock_enabled', enabled);
                 }}
                 notificationsEnabled={notificationsEnabled}
@@ -421,9 +421,9 @@ export function JournalPage() {
                         scheduleNotifications(true, time);
                     }
                 }}
-                pinCode={pinCode}
+                pinCode={externalPinCode}
                 onPinChange={(val) => {
-                    setPinCode(val);
+                    onPinChange?.(val);
                     if (val.length >= 4) {
                         updateSetting('pin_code', val);
                     }

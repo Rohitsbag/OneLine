@@ -202,46 +202,44 @@ export function SettingsOverlay({
                             )}
                         </section>
 
-                        {/* Security Section - Mobile Only */}
-                        {Capacitor.isNativePlatform() && (
-                            <section>
-                                <div className="flex items-center justify-between px-1 mb-3">
-                                    <label className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">Privacy</label>
-                                    <button
-                                        onClick={() => onToggleLock?.(!lockEnabled)}
-                                        className={cn(
-                                            "w-10 h-5 rounded-full relative transition-all duration-300 p-0.5",
-                                            lockEnabled ? accentColor : "bg-zinc-200 dark:bg-zinc-800"
-                                        )}
-                                    >
-                                        <div className={cn("w-4 h-4 rounded-full bg-white shadow-sm transition-all", lockEnabled ? "translate-x-5" : "translate-x-0")} />
-                                    </button>
-                                </div>
-
-                                <div className="p-4 rounded-[2rem] bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-100 dark:border-zinc-800/50 space-y-4">
-                                    <div className="flex items-center justify-between">
-                                        <div className="text-sm font-bold text-zinc-900 dark:text-zinc-200">Local PIN Lock</div>
-                                        <div className="text-[10px] text-zinc-400 font-bold uppercase">Stored Locally</div>
-                                    </div>
-
-                                    {lockEnabled && (
-                                        <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800/50">
-                                            <input
-                                                type="password"
-                                                inputMode="numeric"
-                                                placeholder={pinCode ? "•••••• (PIN Set)" : "Set 4-6 digit PIN"}
-                                                onChange={(e) => {
-                                                    const val = e.target.value.replace(/\D/g, '').slice(0, 6);
-                                                    if (val.length >= 4 || val === "") onPinChange?.(val);
-                                                }}
-                                                className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-2xl px-4 py-3 text-sm font-bold shadow-sm focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all outline-none"
-                                            />
-                                            <p className="mt-3 text-[10px] text-zinc-400 font-medium leading-relaxed"> Minimum 4 digits. Used to unlock the app on this device.</p>
-                                        </div>
+                        {/* Security Section */}
+                        <section>
+                            <div className="flex items-center justify-between px-1 mb-3">
+                                <label className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">Privacy</label>
+                                <button
+                                    onClick={() => onToggleLock?.(!lockEnabled)}
+                                    className={cn(
+                                        "w-10 h-5 rounded-full relative transition-all duration-300 p-0.5",
+                                        lockEnabled ? accentColor : "bg-zinc-200 dark:bg-zinc-800"
                                     )}
+                                >
+                                    <div className={cn("w-4 h-4 rounded-full bg-white shadow-sm transition-all", lockEnabled ? "translate-x-5" : "translate-x-0")} />
+                                </button>
+                            </div>
+
+                            <div className="p-4 rounded-[2rem] bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-100 dark:border-zinc-800/50 space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <div className="text-sm font-bold text-zinc-900 dark:text-zinc-200">Local PIN Lock</div>
+                                    <div className="text-[10px] text-zinc-400 font-bold uppercase">Private Access</div>
                                 </div>
-                            </section>
-                        )}
+
+                                {lockEnabled && (
+                                    <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800/50">
+                                        <input
+                                            type="password"
+                                            inputMode="numeric"
+                                            placeholder={pinCode ? "•••• (PIN Set)" : "Set 4-digit PIN"}
+                                            onChange={(e) => {
+                                                const val = e.target.value.replace(/\D/g, '').slice(0, 4);
+                                                if (val.length === 4 || val === "") onPinChange?.(val);
+                                            }}
+                                            className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-2xl px-4 py-3 text-sm font-bold shadow-sm focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all outline-none"
+                                        />
+                                        <p className="mt-3 text-[10px] text-zinc-400 font-medium leading-relaxed"> Use a 4-digit PIN to secure your journal on this device.</p>
+                                    </div>
+                                )}
+                            </div>
+                        </section>
 
                         {/* STT Section */}
                         <section>
