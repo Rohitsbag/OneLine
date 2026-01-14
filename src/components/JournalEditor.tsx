@@ -84,11 +84,21 @@ const validateImageFile = async (file: File): Promise<boolean> => {
                     b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50;
             },
             'image/heic': (b) => {
-                // HEIC uses ftyp box - check for 'ftyp' at offset 4
-                return b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70;
+                // HEIC uses ftyp box at offset 4, then brand code at offset 8
+                // Valid brands: heic, heix, mif1, msf1
+                const isFtyp = b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70;
+                if (!isFtyp) return false;
+                // Check brand codes: heic(68 65 69 63), heix(68 65 69 78), mif1(6D 69 66 31)
+                const isHeic = b[8] === 0x68 && b[9] === 0x65 && b[10] === 0x69 && (b[11] === 0x63 || b[11] === 0x78);
+                const isMif1 = b[8] === 0x6D && b[9] === 0x69 && b[10] === 0x66 && b[11] === 0x31;
+                return isHeic || isMif1;
             },
             'image/heif': (b) => {
-                return b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70;
+                const isFtyp = b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70;
+                if (!isFtyp) return false;
+                const isHeic = b[8] === 0x68 && b[9] === 0x65 && b[10] === 0x69 && (b[11] === 0x63 || b[11] === 0x78);
+                const isMif1 = b[8] === 0x6D && b[9] === 0x69 && b[10] === 0x66 && b[11] === 0x31;
+                return isHeic || isMif1;
             },
         };
 
@@ -105,6 +115,51 @@ const validateImageFile = async (file: File): Promise<boolean> => {
     } catch (e) {
         console.error("Magic number check failed", e);
         return false;
+    }
+};
+
+// ETERNAL SIGNED URL: 7-day URLs with localStorage cache + auto-refresh
+// This prevents images from breaking after 1 hour
+const getEternalSignedUrl = async (path: string, bucket: string = 'journal-media-private'): Promise<string | null> => {
+    if (!path) return null;
+    if (path.startsWith('http')) return path; // Already a URL
+
+    try {
+        // Check cache first
+        const cacheKey = `signed_url_${bucket}_${path}`;
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+            const { url, expiresAt } = JSON.parse(cached);
+            // If still valid for at least 24 hours, use cached
+            if (expiresAt > Date.now() + 1000 * 60 * 60 * 24) {
+                return url;
+            }
+        }
+
+        // Generate new 7-day signed URL
+        const { data, error } = await supabase.storage
+            .from(bucket)
+            .createSignedUrl(path, 60 * 60 * 24 * 7); // 7 days
+
+        if (error || !data?.signedUrl) {
+            console.warn("Failed to create eternal signed URL:", error?.message);
+            return null;
+        }
+
+        // Cache the URL (expires in 6 days to give buffer for refresh)
+        try {
+            localStorage.setItem(cacheKey, JSON.stringify({
+                url: data.signedUrl,
+                expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 6 // 6 days
+            }));
+        } catch {
+            // Ignore cache write errors (quota)
+        }
+
+        return data.signedUrl;
+    } catch (e) {
+        console.error("Eternal signed URL error:", e);
+        return null;
     }
 };
 
@@ -608,7 +663,7 @@ export function JournalEditor({
         fetchEntry();
     }, [fetchEntry, refreshTrigger]);
 
-    // Image Signed URL
+    // Image Signed URL - ETERNAL 7-DAY URLs with cache
     useEffect(() => {
         let cancelled = false;
         const loadSignedUrl = async () => {
@@ -616,51 +671,47 @@ export function JournalEditor({
                 if (isMountedRef.current && !cancelled) setDisplayUrl(null);
                 return;
             }
-            if (imagePath.startsWith('http')) {
-                if (isMountedRef.current && !cancelled) setDisplayUrl(imagePath);
-                return;
-            }
 
-            const { data, error } = await supabase.storage
-                .from('journal-media-private')
-                .createSignedUrl(imagePath, JOURNAL_CONFIG.SIGNED_URL_EXPIRY_SECONDS);
+            const url = await getEternalSignedUrl(imagePath);
 
-            if (error) {
-                console.warn("Failed to create signed URL:", error.message);
-            }
-
-            if (data?.signedUrl && isMountedRef.current && !cancelled) {
-                setDisplayUrl(data.signedUrl);
-            } else if (isMountedRef.current && !cancelled) {
-                // Handle case where signing fails
-                console.warn("Signed URL creation failed for path:", imagePath);
-                setImageLoadError(true);
+            if (isMountedRef.current && !cancelled) {
+                if (url) {
+                    setDisplayUrl(url);
+                    setImageLoadError(false);
+                } else {
+                    console.warn("Eternal signed URL creation failed for path:", imagePath);
+                    setImageLoadError(true);
+                }
             }
         };
         loadSignedUrl();
         return () => { cancelled = true; };
     }, [imagePath]);
 
-    // NEW: Targeted retry for image loading (Polish)
+    // Targeted retry for image loading with eternal URL
     const refreshImageUrl = useCallback(async () => {
-        if (!imagePath || imagePath.startsWith('http')) return;
+        if (!imagePath) return;
 
         setImageLoadError(false);
-        // Optimistically clear error while processing
 
-        const { data } = await supabase.storage
-            .from('journal-media-private')
-            .createSignedUrl(imagePath, JOURNAL_CONFIG.SIGNED_URL_EXPIRY_SECONDS);
+        // Force refresh by clearing localStorage cache first
+        try {
+            localStorage.removeItem(`signed_url_journal-media-private_${imagePath}`);
+        } catch { }
 
-        if (data?.signedUrl && isMountedRef.current) {
-            setDisplayUrl(data.signedUrl);
-        } else if (isMountedRef.current) {
-            setImageLoadError(true);
-            showToast("Failed to reload image", "error");
+        const url = await getEternalSignedUrl(imagePath);
+
+        if (isMountedRef.current) {
+            if (url) {
+                setDisplayUrl(url);
+            } else {
+                setImageLoadError(true);
+                showToast("Failed to reload image", "error");
+            }
         }
     }, [imagePath, showToast]);
 
-    // Audio Signed URL
+    // Audio Signed URL - ETERNAL 7-DAY URLs with cache
     useEffect(() => {
         let cancelled = false;
         const loadAudioUrl = async () => {
@@ -668,17 +719,11 @@ export function JournalEditor({
                 if (isMountedRef.current && !cancelled) setAudioDisplayUrl(null);
                 return;
             }
-            if (audioPath.startsWith('http')) {
-                if (isMountedRef.current && !cancelled) setAudioDisplayUrl(audioPath);
-                return;
-            }
 
-            const { data } = await supabase.storage
-                .from('journal-media-private')
-                .createSignedUrl(audioPath, JOURNAL_CONFIG.SIGNED_URL_EXPIRY_SECONDS);
+            const url = await getEternalSignedUrl(audioPath);
 
-            if (data?.signedUrl && isMountedRef.current && !cancelled) {
-                setAudioDisplayUrl(data.signedUrl);
+            if (isMountedRef.current && !cancelled && url) {
+                setAudioDisplayUrl(url);
             }
         };
         loadAudioUrl();
@@ -1957,7 +2002,20 @@ export function JournalEditor({
                                 src={displayUrl}
                                 alt={`Journal entry for ${format(currentDate, 'MMMM d, yyyy')}`}
                                 className="w-full h-auto max-h-[500px] object-contain transition-transform duration-700 hover:scale-[1.02]"
-                                onError={() => setImageLoadError(true)}
+                                onError={async () => {
+                                    // AUTO-REFRESH: Try to regenerate eternal URL on error
+                                    if (imagePath && !imageLoadError) {
+                                        try {
+                                            localStorage.removeItem(`signed_url_journal-media-private_${imagePath}`);
+                                        } catch { }
+                                        const newUrl = await getEternalSignedUrl(imagePath);
+                                        if (newUrl && isMountedRef.current) {
+                                            setDisplayUrl(newUrl);
+                                            return; // Don't show error if refresh worked
+                                        }
+                                    }
+                                    setImageLoadError(true);
+                                }}
                                 onLoad={() => setImageLoadError(false)}
                             />
                         )}
