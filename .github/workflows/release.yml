@@ -56,13 +56,15 @@ jobs:
           VERSION_NAME: ${{ github.ref_name }}
           VERSION_CODE: ${{ github.run_number }}
 
-      - name: Calculate Hash
+      - name: Rename and Calculate Hash
         id: calc_hash
         run: |
-          APK_PATH="android/app/build/outputs/apk/release/app-release-unsigned.apk"
-          HASH=$(sha256sum $APK_PATH | awk '{ print $1 }')
+          RAW_APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          FINAL_APK="oneline.apk"
+          mv $RAW_APK $FINAL_APK
+          HASH=$(sha256sum $FINAL_APK | awk '{ print $1 }')
           echo "sha256=$HASH" >> $GITHUB_OUTPUT
-          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "apk_path=$FINAL_APK" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         id: create_release
@@ -78,7 +80,7 @@ jobs:
       - name: Update version.json
         run: |
           # The download URL for the asset in a GitHub release follows this pattern:
-          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/app-release-unsigned.apk"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/oneline.apk"
           
           node scripts/update-manifest.js "${{ env.VERSION_NAME }}" "${{ env.VERSION_CODE }}" "${{ steps.calc_hash.outputs.sha256 }}" "$DOWNLOAD_URL"
 
