@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Lock, Delete, LogOut, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/utils/supabase/client";
