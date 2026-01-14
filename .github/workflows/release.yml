@@ -38,16 +38,15 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Build Android APK
+      - name: Build Android APK (Debug for Auto-Signing)
         run: |
           # Extract version from tag (e.g., v1.0.2 -> 1.0.2)
           VERSION_NAME=${GITHUB_REF_NAME#v}
-          # Create a numeric version code based on build number or timestamp
           VERSION_CODE=${{ github.run_number }}
           
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleDebug
           cd ..
           
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
@@ -56,12 +55,12 @@ jobs:
           VERSION_NAME: ${{ github.ref_name }}
           VERSION_CODE: ${{ github.run_number }}
 
-      - name: Rename and Calculate Hash
-        id: calc_hash
+      - name: Rename and Prepare Public APK
+        id: prep_apk
         run: |
-          RAW_APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
-          FINAL_APK="oneline.apk"
-          mv $RAW_APK $FINAL_APK
+          RAW_APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          FINAL_APK="public/oneline.apk"
+          cp $RAW_APK $FINAL_APK
           HASH=$(sha256sum $FINAL_APK | awk '{ print $1 }')
           echo "sha256=$HASH" >> $GITHUB_OUTPUT
           echo "apk_path=$FINAL_APK" >> $GITHUB_OUTPUT
@@ -70,7 +69,7 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ steps.calc_hash.outputs.apk_path }}
+          files: public/oneline.apk
           name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
@@ -79,17 +78,17 @@ jobs:
 
       - name: Update version.json
         run: |
-          # The download URL for the asset in a GitHub release follows this pattern:
-          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/oneline.apk"
+          # Use the public landing page URL for downloads
+          DOWNLOAD_URL="https://oneline.resolvia.ai/oneline.apk"
           
-          node scripts/update-manifest.js "${{ env.VERSION_NAME }}" "${{ env.VERSION_CODE }}" "${{ steps.calc_hash.outputs.sha256 }}" "$DOWNLOAD_URL"
+          node scripts/update-manifest.js "${{ env.VERSION_NAME }}" "${{ env.VERSION_CODE }}" "${{ steps.prep_apk.outputs.sha256 }}" "$DOWNLOAD_URL"
 
-      - name: Commit and Push Manifest Changes
+      - name: Commit and Push Changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add public/version.json
-          git commit -m "chore: auto-update version.json for ${{ github.ref_name }}"
+          git add public/version.json public/oneline.apk
+          git commit -m "chore: auto-update manifest and apk for ${{ github.ref_name }}"
           git push origin HEAD:main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
