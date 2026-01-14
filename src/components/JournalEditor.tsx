@@ -97,8 +97,10 @@ const validateImageFile = async (file: File): Promise<boolean> => {
             return validator(bytes);
         }
 
-        // For unknown image types, trust MIME if it starts with image/
-        return file.type.startsWith('image/');
+        // SECURITY FIX: Do NOT trust MIME alone - reject unknown file types
+        // Spoofed files could have image/* MIME but malicious content
+        console.warn("Unknown image format, magic bytes don't match known types");
+        return false;
 
     } catch (e) {
         console.error("Magic number check failed", e);
@@ -283,6 +285,18 @@ export function JournalEditor({
     // --- Dual STT Initialization (Web Speech API) ---
     useEffect(() => {
         if (typeof window !== 'undefined') {
+            // MEMORY LEAK FIX: Stop and cleanup old recognition instance before creating new one
+            if (recognitionRef.current) {
+                try {
+                    recognitionRef.current.abort();
+                } catch (e) {
+                    // Ignore abort errors
+                }
+                recognitionRef.current = null;
+            }
+            // Also clear stale transcription data from previous sessions
+            webSpeechResultRef.current = "";
+
             // Enable for BOTH Web and Native (Android WebView supports SpeechRecognition)
             // @ts-ignore
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -290,7 +304,7 @@ export function JournalEditor({
                 const recognition = new SpeechRecognition();
                 recognition.continuous = true;
                 recognition.interimResults = true;
-                recognition.lang = sttLanguage === "Auto" ? "en-US" : (sttLanguage === "Hindi" ? "hi-IN" : "en-US"); // Basic mapping
+                recognition.lang = sttLanguage === "Auto" ? "en-US" : (sttLanguage === "Hindi" ? "hi-IN" : "en-US");
 
                 recognition.onresult = (event: SpeechRecognitionEvent) => {
                     let finalTranscript = '';
@@ -309,7 +323,6 @@ export function JournalEditor({
 
                 // @ts-ignore
                 recognition.onerror = (event) => {
-                    // Ignore transient network errors or expected aborts
                     if (event.error === 'network' || event.error === 'aborted' || event.error === 'no-speech') {
                         return;
                     }
@@ -324,6 +337,18 @@ export function JournalEditor({
                 recognitionRef.current = recognition;
             }
         }
+
+        // CLEANUP: Stop recognition on unmount or language change
+        return () => {
+            if (recognitionRef.current) {
+                try {
+                    recognitionRef.current.abort();
+                } catch (e) {
+                    // Ignore
+                }
+            }
+            webSpeechResultRef.current = "";
+        };
     }, [sttLanguage]);
 
     // Separate effect for URL cleanup avoids re-running global cleanup
@@ -1107,6 +1132,12 @@ export function JournalEditor({
 
     // --- Audio Logic ---
     const startAudioRecording = async () => {
+        // DOUBLE RECORDING GUARD: Prevent starting if already recording
+        if (isRecordingAudio || mediaRecorderRef.current?.state === "recording") {
+            console.warn("Recording already in progress, ignoring start request");
+            return;
+        }
+
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             showToast("Audio recording not supported.", "error");
             return;
@@ -1123,8 +1154,11 @@ export function JournalEditor({
             if (!confirmed) return;
         }
 
+        // TRACK REFERENCE: Keep stream reference for cleanup on error
+        let stream: MediaStream | null = null;
+
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
             // MOBILE COMPATIBILITY: Check supported MIME types
             let mimeType = 'audio/webm';
@@ -1227,7 +1261,7 @@ export function JournalEditor({
                     }
                 }
 
-                stream.getTracks().forEach(track => track.stop());
+                stream?.getTracks().forEach(track => track.stop());
             };
 
             mediaRecorder.start();
@@ -1249,6 +1283,11 @@ export function JournalEditor({
                 }
             }, 1000);
         } catch (error: any) {
+            // CRITICAL: Stop stream tracks if we acquired them before error
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+
             console.error("Error starting audio:", error);
             if (error.name === 'NotAllowedError') {
                 showToast("Microphone access denied. Please enable microphone permissions in settings.", "error");
