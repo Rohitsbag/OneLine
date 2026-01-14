@@ -1567,11 +1567,11 @@ export function JournalEditor({
                     recognitionRef.current.start();
                     isWebSpeechActiveRef.current = true;
                 } catch (e: any) {
-                    // Ignore "already started" errors, but log others
                     if (e.name !== 'InvalidStateError') {
                         console.warn("Failed to start Web Speech API", e);
                     } else {
-                        isWebSpeechActiveRef.current = true; // Assume active if error said so
+                        // If it says "already started", we just mark it as active and continue
+                        isWebSpeechActiveRef.current = true;
                     }
                 }
             }

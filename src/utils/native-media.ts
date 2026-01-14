@@ -73,12 +73,14 @@ export const nativeVoice = {
 /**
  * Native Offline OCR (MLKit) via @capacitor-community/text-recognition
  */
-import { TextRecognition } from '@capacitor-community/text-recognition';
-
+/**
+ * Native Offline OCR (MLKit) via @capacitor-community/text-recognition
+ */
 export async function recognizeText(imageUrl: string): Promise<string[]> {
     if (!isNative()) return [];
 
     try {
+        const { TextRecognition } = await import('@capacitor-community/text-recognition');
         const data = await TextRecognition.recognize({
             filename: imageUrl
         });
