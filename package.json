@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npx tsc && vite build",
     "preview": "vite preview",
     "apk:sync": "powershell -Command \"$apk = Get-ChildItem -Path android/app/build/outputs/apk/release/*.apk, android/app/build/outputs/apk/debug/*.apk, 'One Line App/android/*.apk' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($apk) { Copy-Item $apk.FullName 'public/oneline.apk' -Force; Write-Host 'Synced:' $apk.Name } else { Write-Error 'No APK found in build outputs' }\"",
     "version:bump": "node -e \"const f='public/version.json'; const v=JSON.parse(require('fs').readFileSync(f)); v.versionCode++; const parts=v.version.split('.'); parts[2]=parseInt(parts[2])+1; v.version=parts.join('.'); require('fs').writeFileSync(f, JSON.stringify(v, null, 4)); console.log('Bumped to ' + v.version)\""
