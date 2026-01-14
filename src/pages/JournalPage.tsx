@@ -15,9 +15,18 @@ interface JournalPageProps {
     externalLockEnabled?: boolean;
     onPinChange?: (pin: string | null) => void;
     onLockToggle?: (enabled: boolean) => void;
+    initialPinSetupRequired?: boolean;
+    onPinSetupComplete?: () => void;
 }
 
-export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange, onLockToggle }: JournalPageProps) {
+export function JournalPage({
+    externalPinCode,
+    externalLockEnabled,
+    onPinChange,
+    onLockToggle,
+    initialPinSetupRequired,
+    onPinSetupComplete
+}: JournalPageProps) {
     const [showCalendar, setShowCalendar] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [showTimeline, setShowTimeline] = useState(false);
@@ -34,21 +43,20 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
     const startY = useRef<number | null>(null);
     const PULL_THRESHOLD = 120;
 
-    // Note: isLocked is handled globally in App.tsx now
-
     const [isDark, setIsDark] = useState(() => {
         if (typeof window !== 'undefined') {
             const saved = localStorage.getItem('theme');
-            if (saved) {
-                return saved === 'dark';
-            }
+            if (saved) return saved === 'dark';
             return window.matchMedia('(prefers-color-scheme: dark)').matches;
         }
         return true;
     });
     const navigate = useNavigate();
 
-    const [minDate, setMinDate] = useState<Date>(new Date()); // Default to today until loaded
+    const [minDate, setMinDate] = useState<Date>(new Date());
+    const [isGuest, setIsGuest] = useState(false);
+    const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+    const [showAuthModal, setShowAuthModal] = useState(false);
 
     // Calendar persistence refs
     const lastCalendarCloseTime = useRef<number>(0);
@@ -57,11 +65,10 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
 
     const handleOpenCalendar = () => {
         const now = Date.now();
-        // If reopened within 5 seconds, restore the last viewed month
         if (now - lastCalendarCloseTime.current < 5000 && lastCalendarViewDate.current) {
             setCalendarInitialDate(lastCalendarViewDate.current);
         } else {
-            setCalendarInitialDate(undefined); // Reset to selectedDate
+            setCalendarInitialDate(undefined);
         }
         setShowCalendar(true);
     };
@@ -71,24 +78,24 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
         setShowCalendar(false);
     };
 
-    const [isGuest, setIsGuest] = useState(false);
-    const [isLoadingAuth, setIsLoadingAuth] = useState(true);
-    const [showAuthModal, setShowAuthModal] = useState(false);
+    // Forced PIN Setup flow
+    useEffect(() => {
+        if (initialPinSetupRequired) {
+            setShowSettings(true);
+        }
+    }, [initialPinSetupRequired]);
 
-    // Auth & Initial Data Fetch (OFFLINE-FIRST)
+    // Auth & Initial Data Fetch
     useEffect(() => {
         const initData = async () => {
-            // OFFLINE-FIRST: Try to get cached user first for instant startup
             const cachedUserRaw = localStorage.getItem('cached_user');
             let cachedUser = cachedUserRaw ? JSON.parse(cachedUserRaw) : null;
 
-            // Try to get fresh session
             try {
                 const { data: { session } } = await supabase.auth.getSession();
                 const user = session?.user || null;
 
                 if (user) {
-                    // Cache user for offline use
                     localStorage.setItem('cached_user', JSON.stringify({
                         id: user.id,
                         email: user.email,
@@ -97,15 +104,11 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
                     cachedUser = user;
                     setUserId(user.id);
                 } else if (!cachedUser) {
-                    // No session and no cache = guest mode
                     setIsGuest(true);
                     setIsLoadingAuth(false);
                     return;
                 }
-                // If we have cachedUser but no fresh session, continue in offline mode
             } catch (error) {
-                // Network error - continue with cached user if available
-                console.log('Auth check failed (offline?), using cached user');
                 if (!cachedUser) {
                     setIsGuest(true);
                     setIsLoadingAuth(false);
@@ -114,7 +117,6 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
                 setUserId(cachedUser.id);
             }
 
-            // Load user settings
             if (cachedUser) {
                 const { data: settings } = await supabase
                     .from('user_settings')
@@ -128,55 +130,15 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
                     if (settings.stt_language) setSttLanguage(settings.stt_language);
                     if (settings.notifications_enabled !== undefined) setNotificationsEnabled(settings.notifications_enabled);
                     if (settings.notification_time) setNotificationTime(settings.notification_time);
-                    if (settings.stt_language) setSttLanguage(settings.stt_language);
-                    if (settings.notifications_enabled !== undefined) setNotificationsEnabled(settings.notifications_enabled);
-                    if (settings.notification_time) setNotificationTime(settings.notification_time);
-
-                    // PIN/Lock logic moved to App.tsx
                 }
-            }
-            if (cachedUser?.created_at) {
-                setMinDate(new Date(cachedUser.created_at));
-            }
-
-            // 2. Load User Settings (try from cache first, then server)
-            let settings = null;
-            const cachedSettings = localStorage.getItem('cached_user_settings');
-
-            try {
-                const { data } = await supabase
-                    .from('user_settings')
-                    .select('*')
-                    .eq('user_id', cachedUser.id)
-                    .single();
-
-                if (data) {
-                    settings = data;
-                    localStorage.setItem('cached_user_settings', JSON.stringify(data));
-                }
-            } catch (error) {
-                // Offline - use cached settings
-                if (cachedSettings) {
-                    settings = JSON.parse(cachedSettings);
-                }
-            }
-
-            if (settings) {
-                setAiEnabled(settings.ai_enabled ?? true);
-                const localTheme = localStorage.getItem('theme');
-                if (!localTheme && settings.theme) {
-                    setIsDark(settings.theme === 'dark');
-                }
-                if (settings.accent_color) {
-                    setAccentColor(settings.accent_color);
-                }
+                if (cachedUser.created_at) setMinDate(new Date(cachedUser.created_at));
             }
             setIsLoadingAuth(false);
         };
         initData();
     }, [navigate]);
 
-    // Theme Toggle & Persistence
+    // Theme Toggle
     useEffect(() => {
         const root = window.document.documentElement;
         if (isDark) {
@@ -187,7 +149,6 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
             localStorage.setItem('theme', 'light');
         }
 
-        // Persist to DB (Fire and forget)
         supabase.auth.getUser().then(({ data: { user } }) => {
             if (user) {
                 supabase.from('user_settings').upsert({
@@ -221,12 +182,9 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
         updateSetting('accent_color', colorClass);
     };
 
-    // Notification Scheduling
     const scheduleNotifications = async (enabled: boolean, timeStr?: string) => {
         try {
             const { LocalNotifications } = await import('@capacitor/local-notifications');
-
-            // Always cancel existing ones first
             await LocalNotifications.cancel({ notifications: [{ id: 1 }] });
 
             if (enabled) {
@@ -240,14 +198,8 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
                                 id: 1,
                                 title: "Time for your OneLine",
                                 body: "Capture your thought for today.",
-                                schedule: {
-                                    allowWhileIdle: true,
-                                    every: 'day',
-                                    on: { hour, minute }
-                                },
+                                schedule: { allowWhileIdle: true, every: 'day', on: { hour, minute } },
                                 smallIcon: "ic_stat_oneline",
-                                actionTypeId: "",
-                                extra: null
                             }
                         ]
                     });
@@ -271,13 +223,9 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
         const diff = currentY - startY.current;
 
         if (diff > 0 && window.scrollY === 0) {
-            // Logarithmic pulling feel
             const progress = Math.min(diff / 1.5, PULL_THRESHOLD + 20);
             setPullProgress(progress);
-            if (diff > 20) {
-                // Prevent browser-default pull behavior on some browsers
-                if (e.cancelable) e.preventDefault();
-            }
+            if (diff > 20 && e.cancelable) e.preventDefault();
         } else {
             setPullProgress(0);
             setIsPulling(false);
@@ -285,9 +233,7 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
     };
 
     const handleTouchEnd = () => {
-        if (pullProgress > PULL_THRESHOLD) {
-            triggerRefresh();
-        }
+        if (pullProgress > PULL_THRESHOLD) triggerRefresh();
         setPullProgress(0);
         setIsPulling(false);
         startY.current = null;
@@ -295,9 +241,7 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
 
     const triggerRefresh = () => {
         setRefreshTrigger(prev => prev + 1);
-        if (typeof window !== 'undefined' && navigator.vibrate) {
-            navigator.vibrate(10); // Subtle haptic feedback
-        }
+        if (typeof window !== 'undefined' && navigator.vibrate) navigator.vibrate(10);
     };
 
     if (isLoadingAuth) {
@@ -307,8 +251,6 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
             </div>
         );
     }
-
-    // Global PinLock is handled in App.tsx
 
     return (
         <div className="flex min-h-screen flex-col items-center w-full font-sans animate-in fade-in duration-700">
@@ -349,16 +291,13 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
                             "w-6 h-6 border-2 border-zinc-300 dark:border-zinc-700 rounded-full flex items-center justify-center",
                             pullProgress > PULL_THRESHOLD && "border-t-transparent animate-spin"
                         )}>
-                            <div className={cn(
-                                "w-1.5 h-1.5 rounded-full",
-                                pullProgress > PULL_THRESHOLD ? "hidden" : accentColor
-                            )} />
+                            <div className={cn("w-1.5 h-1.5 rounded-full", pullProgress > PULL_THRESHOLD ? "hidden" : accentColor)} />
                         </div>
                     </div>
                 </div>
 
                 <JournalEditor
-                    key={selectedDate.toISOString()} // NUCLEAR OPTION: Destroy editor on date change
+                    key={selectedDate.toISOString()}
                     date={selectedDate}
                     onDateChange={setSelectedDate}
                     minDate={minDate}
@@ -392,7 +331,10 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
 
             <SettingsOverlay
                 isOpen={showSettings}
-                onClose={() => setShowSettings(false)}
+                onClose={() => {
+                    setShowSettings(false);
+                    if (initialPinSetupRequired) onPinSetupComplete?.();
+                }}
                 aiEnabled={aiEnabled}
                 onToggleAi={toggleAi}
                 accentColor={accentColor}
@@ -417,17 +359,13 @@ export function JournalPage({ externalPinCode, externalLockEnabled, onPinChange,
                 onTimeChange={(time) => {
                     setNotificationTime(time);
                     updateSetting('notification_time', time);
-                    if (notificationsEnabled) {
-                        scheduleNotifications(true, time);
-                    }
+                    if (notificationsEnabled) scheduleNotifications(true, time);
                 }}
                 pinCode={externalPinCode}
                 onPinChange={(val) => {
                     onPinChange?.(val);
-                    if (val.length >= 4) {
-                        updateSetting('pin_code', val);
-                    }
                 }}
+                isForcedSetup={initialPinSetupRequired}
             />
 
             {userId && (

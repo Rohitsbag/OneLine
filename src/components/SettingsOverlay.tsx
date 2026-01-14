@@ -2,6 +2,7 @@ import { X, FileDown, LogOut, User as UserIcon, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { supabase } from "@/utils/supabase/client";
+import { hashPin, generateDeviceSalt } from "@/utils/security";
 import { useNavigate } from "react-router-dom";
 import { Capacitor } from "@capacitor/core";
 import { ACCENT_COLORS } from "@/constants/colors";
@@ -27,6 +28,7 @@ interface SettingsOverlayProps {
     onTimeChange?: (time: string) => void;
     pinCode?: string | null;
     onPinChange?: (pin: string) => void;
+    isForcedSetup?: boolean;
 }
 
 export function SettingsOverlay({
@@ -36,9 +38,16 @@ export function SettingsOverlay({
     lockEnabled = false, onToggleLock,
     notificationsEnabled = false, onToggleNotifications,
     notificationTime = "20:00", onTimeChange,
-    pinCode = null, onPinChange
+    pinCode = null, onPinChange,
+    isForcedSetup = false
 }: SettingsOverlayProps) {
     const [email, setEmail] = useState<string | null>(null);
+    const [pinLength, setPinLength] = useState<4 | 6>(pinCode?.length === 6 ? 6 : 4);
+    const [tempPin, setTempPin] = useState("");
+    const [confirmPin, setConfirmPin] = useState("");
+    const [setupStep, setSetupStep] = useState<"initial" | "confirm">("initial");
+    const [isSaving, setIsSaving] = useState(false);
+
     const navigate = useNavigate();
     const { showToast } = useToast();
 
@@ -51,6 +60,13 @@ export function SettingsOverlay({
     }, [isOpen]);
 
     const handleSignOut = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+            localStorage.removeItem(`pin_hash_${user.id}`);
+            localStorage.removeItem(`device_salt_${user.id}`);
+            localStorage.removeItem('cached_user_settings');
+            localStorage.removeItem('cached_user');
+        }
         await supabase.auth.signOut();
         onClose();
         navigate('/auth');
@@ -105,6 +121,19 @@ export function SettingsOverlay({
                 {/* Scrollable Content - Tighter Padding */}
                 <div className="flex-1 overflow-y-auto no-scrollbar">
                     <div className="p-6 space-y-8">
+
+                        {/* Forced Setup Warning */}
+                        {isForcedSetup && (
+                            <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-3xl flex items-start gap-3">
+                                <Info className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                                <div className="space-y-1">
+                                    <div className="text-sm font-bold text-amber-500 uppercase tracking-tighter">Action Required</div>
+                                    <p className="text-xs text-amber-600 dark:text-amber-400 leading-relaxed font-medium">
+                                        Your account has PIN protection enabled. Please set a new PIN for this device to continue.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
 
                         {/* User Summary */}
                         <div className="flex items-center gap-4 bg-zinc-50 dark:bg-zinc-900/40 p-4 rounded-3xl border border-zinc-100 dark:border-zinc-800/50">
@@ -224,18 +253,95 @@ export function SettingsOverlay({
                                 </div>
 
                                 {lockEnabled && (
-                                    <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800/50">
-                                        <input
-                                            type="password"
-                                            inputMode="numeric"
-                                            placeholder={pinCode ? "•••• (PIN Set)" : "Set 4-digit PIN"}
-                                            onChange={(e) => {
-                                                const val = e.target.value.replace(/\D/g, '').slice(0, 4);
-                                                if (val.length === 4 || val === "") onPinChange?.(val);
-                                            }}
-                                            className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-2xl px-4 py-3 text-sm font-bold shadow-sm focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all outline-none"
-                                        />
-                                        <p className="mt-3 text-[10px] text-zinc-400 font-medium leading-relaxed"> Use a 4-digit PIN to secure your journal on this device.</p>
+                                    <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800/50 space-y-4">
+                                        <div className="flex gap-2 p-1 bg-white dark:bg-zinc-800 rounded-2xl shadow-sm ring-1 ring-zinc-200 dark:ring-zinc-700 w-fit">
+                                            {[4, 6].map((len) => (
+                                                <button
+                                                    key={len}
+                                                    onClick={() => {
+                                                        setPinLength(len as 4 | 6);
+                                                        setTempPin("");
+                                                        setConfirmPin("");
+                                                        setSetupStep("initial");
+                                                    }}
+                                                    className={cn(
+                                                        "px-4 py-1.5 rounded-xl text-[10px] font-black transition-all",
+                                                        pinLength === len
+                                                            ? cn(accentColor, "text-white shadow-md")
+                                                            : "text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                                                    )}
+                                                >
+                                                    {len} DIGITS
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            <input
+                                                type="password"
+                                                inputMode="numeric"
+                                                placeholder={setupStep === "initial" ? (pinCode ? "Enter new PIN" : `Enter ${pinLength}-digit PIN`) : "Confirm PIN"}
+                                                value={setupStep === "initial" ? tempPin : confirmPin}
+                                                onChange={async (e) => {
+                                                    const val = e.target.value.replace(/\D/g, '').slice(0, pinLength);
+                                                    if (setupStep === "initial") {
+                                                        setTempPin(val);
+                                                        if (val.length === pinLength) {
+                                                            setSetupStep("confirm");
+                                                        }
+                                                    } else {
+                                                        setConfirmPin(val);
+                                                        if (val.length === pinLength) {
+                                                            if (val === tempPin) {
+                                                                setIsSaving(true);
+                                                                const { data: { user } } = await supabase.auth.getUser();
+                                                                if (user) {
+                                                                    const salt = generateDeviceSalt();
+                                                                    const hash = await hashPin(user.id, val, salt);
+
+                                                                    // Update Server (We store length-only placeholder in pin_code for logic, but real verification is hash)
+                                                                    // Actually, let's store the hash on the server too for multi-device sync if we want, 
+                                                                    // but the CTO said hash is final.
+                                                                    const { error } = await supabase
+                                                                        .from('user_settings')
+                                                                        .upsert({
+                                                                            user_id: user.id,
+                                                                            pin_code: "*".repeat(pinLength), // Placeholder for length/presence
+                                                                            lock_enabled: true,
+                                                                            updated_at: new Date().toISOString()
+                                                                        });
+
+                                                                    if (!error) {
+                                                                        localStorage.setItem(`pin_hash_${user.id}`, hash);
+                                                                        localStorage.setItem(`device_salt_${user.id}`, salt);
+                                                                        onPinChange?.("*".repeat(pinLength));
+                                                                        showToast("PIN secured successfully", "success");
+                                                                        setSetupStep("initial");
+                                                                        setTempPin("");
+                                                                        setConfirmPin("");
+                                                                    } else {
+                                                                        showToast("Failed to save PIN", "error");
+                                                                    }
+                                                                }
+                                                                setIsSaving(false);
+                                                            } else {
+                                                                showToast("PINs do not match", "error");
+                                                                setConfirmPin("");
+                                                                setSetupStep("initial");
+                                                                setTempPin("");
+                                                            }
+                                                        }
+                                                    }
+                                                }}
+                                                disabled={isSaving}
+                                                className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-2xl px-4 py-3 text-sm font-bold shadow-sm focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all outline-none"
+                                            />
+                                            <p className="px-1 text-[10px] text-zinc-400 font-medium leading-relaxed">
+                                                {setupStep === "initial"
+                                                    ? `Choose a ${pinLength}-digit PIN to lock your journal.`
+                                                    : "Please re-enter your PIN to confirm."}
+                                            </p>
+                                        </div>
                                     </div>
                                 )}
                             </div>

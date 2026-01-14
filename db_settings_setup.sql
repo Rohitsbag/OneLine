@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS user_settings (
   voice_enabled boolean DEFAULT true,
   theme text DEFAULT 'dark',
   accent_color text DEFAULT 'bg-white',
+  pin_code text,
+  lock_enabled boolean DEFAULT false,
   updated_at timestamptz DEFAULT now()
 );
 
@@ -13,18 +15,21 @@ ALTER TABLE user_settings ENABLE ROW LEVEL SECURITY;
 
 -- 3. Policies
 -- View own settings
+DROP POLICY IF EXISTS "Users can view own settings" ON user_settings;
 CREATE POLICY "Users can view own settings" 
 ON user_settings FOR SELECT 
 TO authenticated 
 USING (auth.uid() = user_id);
 
 -- Update own settings
+DROP POLICY IF EXISTS "Users can update own settings" ON user_settings;
 CREATE POLICY "Users can update own settings" 
 ON user_settings FOR UPDATE 
 TO authenticated 
 USING (auth.uid() = user_id);
 
 -- Insert own settings
+DROP POLICY IF EXISTS "Users can insert own settings" ON user_settings;
 CREATE POLICY "Users can insert own settings" 
 ON user_settings FOR INSERT 
 TO authenticated 

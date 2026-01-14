@@ -36,6 +36,7 @@ function App() {
     const [lockEnabled, setLockEnabled] = useState(false);
     const [accentColor, setAccentColor] = useState("bg-indigo-500");
     const lastBackgroundTime = useRef<number | null>(null);
+    const [isPinSetupRequired, setIsPinSetupRequired] = useState(false);
 
     // Update system state
     const [updateManifest, setUpdateManifest] = useState<VersionManifest | null>(null);
@@ -64,9 +65,16 @@ function App() {
                     setLockEnabled(!!settings.lock_enabled);
                     setAccentColor(settings.accent_color || "bg-indigo-500");
 
-                    // Initial lock only if enabled and pin exists
-                    if (settings.lock_enabled && settings.pin_code) {
-                        setIsLocked(true);
+                    // Production-Grade PIN Logic
+                    const cachedPinHash = localStorage.getItem(`pin_hash_${user.id}`);
+
+                    if (settings.lock_enabled) {
+                        if (cachedPinHash) {
+                            setIsLocked(true);
+                        } else {
+                            // CASE: App Reinstall or Cache Cleared but Server says Locked
+                            setIsPinSetupRequired(true);
+                        }
                     }
                 }
             }
@@ -144,8 +152,8 @@ function App() {
             if (lockEnabled && pinCode && lastBackgroundTime.current) {
                 const now = Date.now();
                 const diff = (now - lastBackgroundTime.current) / 1000;
-                // Auto-lock if backgrounded for more than 10 seconds
-                if (diff > 10) {
+                // Auto-lock if backgrounded for more than 60 seconds (Production Threshold)
+                if (diff > 60) {
                     setIsLocked(true);
                 }
                 lastBackgroundTime.current = null;
@@ -273,8 +281,10 @@ function App() {
                             <JournalPage
                                 externalPinCode={pinCode}
                                 externalLockEnabled={lockEnabled}
-                                onPinChange={(pin) => setPinCode(pin)}
-                                onLockToggle={(enabled) => setLockEnabled(enabled)}
+                                onPinChange={(pin: string | null) => setPinCode(pin)}
+                                onLockToggle={(enabled: boolean) => setLockEnabled(enabled)}
+                                initialPinSetupRequired={isPinSetupRequired}
+                                onPinSetupComplete={() => setIsPinSetupRequired(false)}
                             />
                         }
                     />
