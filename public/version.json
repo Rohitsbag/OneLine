@@ -1,6 +1,6 @@
 {
-    "version": "1.0.17",
-    "versionCode": 17,
+    "version": "1.0.18",
+    "versionCode": 18,
     "downloadUrl": "https://get-one-line.vercel.app/oneline.apk",
     "sha256": "c2a0835a5977b386630bc9587f6a9795cddb8955235b10134612a1930dc23b68",
     "releaseNotes": "Production-grade PIN lock system with secure OTP reset and hardened security.",

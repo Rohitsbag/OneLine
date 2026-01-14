@@ -63,7 +63,7 @@ export async function checkForUpdate(retryCount = 0): Promise<UpdateInfo> {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), VERSION_CHECK_TIMEOUT);
 
-        const response = await fetch('/version.json', {
+        const response = await fetch('./version.json', {
             cache: 'no-cache',
             signal: controller.signal
         });

@@ -8,7 +8,7 @@ const config: CapacitorConfig = {
     // App works without internet, syncs when connected
     android: {
         allowMixedContent: false,
-        webContentsDebuggingEnabled: false
+        webContentsDebuggingEnabled: true
     }
 };
 
