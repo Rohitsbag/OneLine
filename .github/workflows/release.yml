@@ -79,7 +79,7 @@ jobs:
       - name: Update version.json
         run: |
           # Use the public landing page URL for downloads
-          DOWNLOAD_URL="https://oneline.resolvia.ai/oneline.apk"
+          DOWNLOAD_URL="https://get-one-line.vercel.app/oneline.apk"
           
           node scripts/update-manifest.js "${{ env.VERSION_NAME }}" "${{ env.VERSION_CODE }}" "${{ steps.prep_apk.outputs.sha256 }}" "$DOWNLOAD_URL"
 
