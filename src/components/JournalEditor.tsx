@@ -1415,25 +1415,9 @@ export function JournalEditor({
                 recordingTimerRef.current = null;
             }
 
-            // 3. Process Result (Fallback Chain)
-            setIsTranscribing(true);
-            try {
-                // Wait a moment for MediaRecorder "onstop" to fire and create blob
-                // We handle the actual API call in the 'onstop' handler of MediaRecorder below
-                // But we need to pass the "intent" that this was a transcription, not a voice note.
-                // Refactor: We can't rely on 'onstop' for transcription because 'onstop' is also used for Voice Notes.
-                // Current architecture uses 'isRecordingAudio' vs 'isRecording' state to differentiate.
-                // 'isRecording' = STT Mode. 'isRecordingAudio' = Voice Note Mode.
-
-                // The 'mediaRecorder.onstop' is currently shared? No, let's check.
-                // Ah, 'startAudioRecording' creates a NEW MediaRecorder instance every time. 
-                // BUT 'toggleRecording' logic below (START) re-uses or creates a new one?
-                // Let's look at START logic below.
-
-            } catch (err) {
-                console.error("Transcription stop error", err);
-                setIsTranscribing(false);
-            }
+            // 3. Transcription happens in the 'onstop' handler of MediaRecorder.
+            // The onstop handler sets isTranscribing state appropriately.
+            // We don't do anything else here - the flow continues in onstop.
         } else {
             // --- START RECORDING ---
             try {
