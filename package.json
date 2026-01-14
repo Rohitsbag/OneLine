@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npx tsc && vite build",
+    "build": "tsc && vite build",
     "preview": "vite preview",
     "apk:sync": "powershell -Command \"$apk = Get-ChildItem -Path android/app/build/outputs/apk/release/*.apk, android/app/build/outputs/apk/debug/*.apk, 'One Line App/android/*.apk' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($apk) { Copy-Item $apk.FullName 'public/oneline.apk' -Force; Write-Host 'Synced:' $apk.Name } else { Write-Error 'No APK found in build outputs' }\"",
     "version:bump": "node -e \"const f='public/version.json'; const v=JSON.parse(require('fs').readFileSync(f)); v.versionCode++; const parts=v.version.split('.'); parts[2]=parseInt(parts[2])+1; v.version=parts.join('.'); require('fs').writeFileSync(f, JSON.stringify(v, null, 4)); console.log('Bumped to ' + v.version)\""
@@ -35,7 +35,8 @@
     "react-router-dom": "^6.22.3",
     "tailwind-merge": "^2.2.0",
     "tesseract.js": "^5.1.1",
-    "three": "^0.182.0"
+    "three": "^0.182.0",
+    "typescript": "^5.2.2"
   },
   "devDependencies": {
     "@types/react": "^18.2.64",
@@ -45,7 +46,6 @@
     "autoprefixer": "^10.4.18",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
-    "typescript": "^5.2.2",
     "vite": "^7.3.1"
   }
 }
