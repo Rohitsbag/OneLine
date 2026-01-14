@@ -1,19 +1,10 @@
 {
-<<<<<<< HEAD
-    "version": "1.0.14",
-    "versionCode": 14,
-    "downloadUrl": "https://oneline.resolvia.ai/oneline.apk",
-    "sha256": "03118d55325a7673848c23f106b659f61b90c9f664d37933812298c32099f050",
-    "releaseNotes": "Initial release with production-grade update system.",
-    "minimumVersion": "1.0.14",
-=======
     "version": "1.0.17",
     "versionCode": 17,
     "downloadUrl": "https://get-one-line.vercel.app/oneline.apk",
-    "sha256": "LOCAL_BUILD_PENDING",
+    "sha256": "c2a0835a5977b386630bc9587f6a9795cddb8955235b10134612a1930dc23b68",
     "releaseNotes": "Production-grade PIN lock system with secure OTP reset and hardened security.",
     "minimumVersion": "1.0.16",
->>>>>>> 183898c (feat: manual release of new PIN lock system)
     "forceUpdate": false,
     "killSwitch": false
 }
