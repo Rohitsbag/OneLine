@@ -1,10 +1,10 @@
 {
-    "version": "1.0.12",
-    "versionCode": 12,
-    "downloadUrl": "https://github.com/Rohitsbag/OneLine/releases/download/v1.0.12/app-release-unsigned.apk",
-    "sha256": "997fc999bde957b1c56fc8fce077f867a89bfb676282999a47295009de338a4d",
+    "version": "1.0.14",
+    "versionCode": 14,
+    "downloadUrl": "https://oneline.resolvia.ai/oneline.apk",
+    "sha256": "03118d55325a7673848c23f106b659f61b90c9f664d37933812298c32099f050",
     "releaseNotes": "Initial release with production-grade update system.",
-    "minimumVersion": "1.0.12",
+    "minimumVersion": "1.0.14",
     "forceUpdate": false,
     "killSwitch": false
 }
