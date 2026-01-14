@@ -26,7 +26,6 @@
     "@types/three": "^0.182.0",
     "browser-image-compression": "^2.0.2",
     "capacitor-voice-recorder": "^5.0.0",
-    "@capacitor-community/text-recognition": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.0",
     "date-fns": "^3.6.0",

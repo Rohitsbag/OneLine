@@ -68,25 +68,7 @@ export const nativeVoice = {
         }
         return null;
     }
-};
-
-/**
- * Native Offline OCR (MLKit) via @capacitor-community/text-recognition
- */
-/**
- * Native Offline OCR (MLKit) via @capacitor-community/text-recognition
- */
-export async function recognizeText(imageUrl: string): Promise<string[]> {
-    if (!isNative()) return [];
-
-    try {
-        const { TextRecognition } = await import('@capacitor-community/text-recognition');
-        const data = await TextRecognition.recognize({
-            filename: imageUrl
-        });
-        return data.text ? [data.text] : [];
-    } catch (e) {
-        console.error("Native OCR failed:", e);
-        return [];
-    }
 }
+// NOTE: Native OCR (@capacitor-community/text-recognition) can be added here
+// after running: npm install @capacitor-community/text-recognition --legacy-peer-deps
+// For now, OCR uses Tesseract.js fallback in ai.ts

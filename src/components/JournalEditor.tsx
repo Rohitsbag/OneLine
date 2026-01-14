@@ -1629,31 +1629,8 @@ export function JournalEditor({
         if (nativeMedia.isNative()) {
             const result = await nativeMedia.getPhoto('CAMERA');
             if (result) {
-                // NATIVE OFFLINE OCR (MLKit)
-                setIsProcessingOCR(true);
-                try {
-                    const { recognizeText } = await import("@/utils/native-media"); // Import locally to avoid circular deps if any
-                    // Note: result.url is a local filesystem path on native
-                    const textArray = await recognizeText(result.url);
-                    const text = textArray.join('\n');
-
-                    if (text && text.trim().length > 0) {
-                        if (isMountedRef.current) {
-                            setContent(prev => {
-                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                return prev + (needsSpace ? ' ' : '') + text;
-                            });
-                            showToast("Text scanned (Offline Mode)", "success");
-                        }
-                    } else {
-                        showToast("No text found.", "warning");
-                    }
-                } catch (e) {
-                    console.error("Native OCR Error:", e);
-                    showToast("Text scan failed.", "error");
-                } finally {
-                    setIsProcessingOCR(false);
-                }
+                // Use existing OCR handler (Tesseract.js or AI-based)
+                await handleOCRUploadManual(result.blob);
             }
             return;
         }
