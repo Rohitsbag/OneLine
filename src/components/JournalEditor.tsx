@@ -1345,7 +1345,7 @@ export function JournalEditor({
     // --- STT Logic (Tiered: Whisper Online / WebSpeech Offline) ---
     const [isTranscribing, setIsTranscribing] = useState(false);
 
-    const toggleRecording = async () => {
+    const toggleRecording = useCallback(async () => {
         if (isRecording) {
             // STOP RECORDING
             if (nativeMedia.isNative()) {
@@ -1570,7 +1570,7 @@ export function JournalEditor({
             console.error("Error starting STT:", error);
             showToast("Could not access microphone.", "error");
         }
-    };
+    }, [isRecording, sttLanguage, showToast]);
 
     const triggerHaptic = useCallback((pattern: number | number[] = 10) => {
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
