@@ -1497,6 +1497,13 @@ export function JournalEditor({
                 }
 
                 if (result) {
+                    // GUARD: Check if recording is too short for Whisper (min 0.01s, using 1s for safety)
+                    if (recordingDuration < 1 || !result.blob || result.blob.size < 1000) {
+                        console.warn("Recording too short, skipping transcription");
+                        showToast("Recording too short.", "warning");
+                        return;
+                    }
+
                     setIsTranscribing(true);
                     try {
                         const { transcribeAudio } = await import("@/utils/ai");
@@ -1623,6 +1630,17 @@ export function JournalEditor({
             mediaRecorder.onstop = async () => {
                 // This runs when we call .stop() in the STOP block above
                 const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+
+                // GUARD: Check if audio is too short for Whisper
+                if (recordingDuration < 1 || audioBlob.size < 1000) {
+                    console.warn("Web recording too short, skipping transcription");
+                    if (isMountedRef.current) {
+                        showToast("Recording too short.", "warning");
+                        setIsTranscribing(false);
+                    }
+                    stream.getTracks().forEach(track => track.stop()); // Cleanup mic immediately
+                    return;
+                }
 
                 // CRITICAL: Set transcribing state at START of transcription
                 if (isMountedRef.current) setIsTranscribing(true);
