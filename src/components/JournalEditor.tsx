@@ -6,9 +6,9 @@ import { cn } from "@/lib/utils";
 import { compressImage } from "@/utils/image";
 import { AudioPlayer } from "./AudioPlayer";
 import { ACCENT_COLORS } from "@/constants/colors";
-import { performOCR } from "@/utils/ai";
 import { useToast } from "./Toast";
 import { JOURNAL_CONFIG } from "@/constants/journal";
+import * as nativeMedia from "@/utils/native-media";
 
 // Fix Types for SpeechRecognition
 interface SpeechRecognitionEvent extends Event {
@@ -176,9 +176,7 @@ export function JournalEditor({
     const isDirtyRef = useRef(false);
     const isMountedRef = useRef(true);
     const activeDateRef = useRef(currentDate);
-    const lastAppendedTextRef = useRef("");
     const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
-    const browserTranscriptBackupRef = useRef<string | null>(null); // Dual STT: browser backup
     const contentDateRef = useRef(format(date, 'yyyy-MM-dd'));
 
     // Sync refs with state
@@ -1013,6 +1011,52 @@ export function JournalEditor({
         }
     };
 
+    // --- Shared Upload Handlers ---
+    const handleVoiceNote = async (audioBlob: Blob) => {
+        const type = audioBlob.type || 'audio/webm';
+        const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm';
+        const fileName = `${userId}/audio-${Date.now()}.${ext}`;
+
+        const { error } = await supabase.storage
+            .from('journal-media-private')
+            .upload(fileName, audioBlob);
+
+        if (error) {
+            console.error("Audio upload failed:", error);
+            showToast("Voice note upload failed.", "error");
+            if (isMountedRef.current) setHasError(true);
+        } else {
+            if (isMountedRef.current) {
+                const isActiveDate = format(activeDateRef.current, 'yyyy-MM-dd') === format(currentDate, 'yyyy-MM-dd');
+                if (isActiveDate) {
+                    setAudioPath(fileName);
+                    setHasError(false);
+                }
+            }
+        }
+    };
+
+    const handleOCRUploadManual = async (blob: Blob) => {
+        setIsProcessingOCR(true);
+        try {
+            const { performOCR } = await import("@/utils/ai");
+            const ocrFile = new File([blob], "ocr.webp", { type: blob.type });
+            const result = await performOCR(ocrFile);
+            if (result && isMountedRef.current) {
+                setContent(prev => {
+                    const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                    return prev + (needsSpace ? ' ' : '') + result;
+                });
+                showToast("Text extracted successfully", "success");
+            }
+        } catch (err: any) {
+            console.error("OCR Failed:", err);
+            showToast(err.message || "OCR failed.", "error");
+        } finally {
+            setIsProcessingOCR(false);
+        }
+    };
+
     // --- Audio Logic ---
     const startAudioRecording = async () => {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -1166,17 +1210,33 @@ export function JournalEditor({
         }
     };
 
-    const stopAudioRecording = () => {
+    const stopAudioRecording = async () => {
+        if (!isRecordingAudio) return;
+
+        if (nativeMedia.isNative()) {
+            const result = await nativeMedia.nativeVoice.stop();
+            setIsRecordingAudio(false);
+            if (recordingTimerRef.current) {
+                clearInterval(recordingTimerRef.current);
+                recordingTimerRef.current = null;
+            }
+
+            if (result) {
+                await handleVoiceNote(result.blob);
+            }
+            return;
+        }
+
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
             mediaRecorderRef.current.stop();
         }
-        // Stop timer on manual stop
+        setIsRecordingAudio(false);
         if (recordingTimerRef.current) {
             clearInterval(recordingTimerRef.current);
             recordingTimerRef.current = null;
         }
-        setIsRecordingAudio(false);
     };
+
 
     const removeAudio = async () => {
         if (!userId || !audioPath) return;
@@ -1240,242 +1300,65 @@ export function JournalEditor({
     const toggleRecording = async () => {
         if (isRecording) {
             // STOP RECORDING
-            if (recognitionRef.current) {
-                // Offline mode stop
-                recognitionRef.current.stop();
+            if (nativeMedia.isNative()) {
+                const result = await nativeMedia.nativeVoice.stop();
                 setIsRecording(false);
-            } else if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-                // Online mode stop
+                if (recordingTimerRef.current) {
+                    clearInterval(recordingTimerRef.current);
+                    recordingTimerRef.current = null;
+                }
+
+                if (result) {
+                    setIsTranscribing(true);
+                    try {
+                        const { transcribeAudio } = await import("@/utils/ai");
+                        const text = await transcribeAudio(result.blob, 'whisper-large-v3-turbo', sttLanguage);
+                        if (text && isMountedRef.current) {
+                            setContent(prev => {
+                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                return prev + (needsSpace ? ' ' : '') + text;
+                            });
+                        }
+                    } catch (err) {
+                        console.error("Native transcription failed:", err);
+                        showToast("Transcription failed.", "error");
+                    } finally {
+                        setIsTranscribing(false);
+                    }
+                }
+                return;
+            }
+
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
                 mediaRecorderRef.current.stop();
-                setIsRecording(false);
+            }
+            setIsRecording(false);
+            if (recordingTimerRef.current) {
+                clearInterval(recordingTimerRef.current);
+                recordingTimerRef.current = null;
             }
         } else {
             // START RECORDING
-
-            // Check Network Tier
-            const { detectNetworkTier, getSTTModel } = await import("@/utils/stt-tiered");
-            // FORCE OFFLINE if state indicates offline (e.g. API failed previously)
-            let tier = isOffline ? 'offline' : detectNetworkTier();
-
-            // SMART FALLBACK: If nominally online, do a quick API health check
-            // If API is broken (e.g., auth issues), fall back to offline mode proactively
-            // OPTIMIZED AUTH: Use local session check or cached userId to avoid redundant API hits
-            if (tier !== "offline") {
-                const { data: { session } } = await supabase.auth.getSession();
-                if (!session?.access_token && !userId) {
-                    console.log("No session - using offline STT mode");
-                    tier = "offline";
-                }
-            }
-
-            if (tier === "offline") {
-                // === OFFLINE MODE: Web Speech API ===
-                const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-                if (!SpeechRecognition) {
-                    showToast("Offline voice recognition not supported on this device.", "warning");
+            if (nativeMedia.isNative()) {
+                const hasPerm = await nativeMedia.nativeVoice.requestPermission();
+                if (!hasPerm) {
+                    showToast("Microphone permission denied.", "error");
                     return;
                 }
 
-                const recognition = new SpeechRecognition();
-                recognition.continuous = true;
-                recognition.interimResults = false;
-                recognition.lang = 'en-US';
+                await nativeMedia.nativeVoice.start();
+                setIsRecording(true);
+                setRecordingDuration(0);
+                recordingTimerRef.current = setInterval(() => {
+                    setRecordingDuration(prev => prev + 1);
+                }, 1000);
 
-                recognition.onstart = () => {
-                    setIsRecording(true);
-                    lastAppendedTextRef.current = "";
-                };
-                recognition.onend = () => {
-                    setIsRecording(false);
-                    recognitionRef.current = null;
-                };
-                recognition.onerror = (e: any) => {
-                    console.warn('Speech recognition error:', e.error);
-                    setIsRecording(false);
-                };
-                recognition.onresult = (event: any) => {
-                    const latestResult = event.results[event.results.length - 1];
-                    if (latestResult.isFinal) {
-                        // ROBUST STT DEDUPLICATION (Master Prompt #5)
-                        const newText = latestResult[0].transcript.trim();
-                        if (!newText) return;
-
-                        // Get the truly new part by checking if the previous text ends with the beginning of new text
-                        // or if the new text starts with the previous text (overlap)
-                        let textToAppend = newText;
-
-                        // normalize (remove case/punctuation for check)
-                        const normalize = (str: string) => str.toLowerCase().replace(/[.,!?;]/g, '');
-
-                        // Check if exact same content came through (common phantom event)
-                        if (normalize(newText) === normalize(lastAppendedTextRef.current)) return;
-
-                        // Incremental append strategy:
-                        // Only Append if it's genuinely new content
-                        if (textToAppend !== lastAppendedTextRef.current) {
-                            lastAppendedTextRef.current = textToAppend;
-
-                            setContent(prev => {
-                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                return prev + (needsSpace ? ' ' : '') + textToAppend;
-                            });
-                        }
-                    }
-                };
-
-                recognitionRef.current = recognition;
-                try {
-                    recognition.start();
-                } catch (startError: any) {
-                    console.error("Failed to start speech recognition:", startError);
-                    showToast("Could not start voice recognition. Please try again.", "error");
-                    setIsRecording(false);
-                    return;
-                }
-
-            } else {
-                // === ONLINE MODE: Whisper (High Quality) + Browser STT Backup (Dual Recording) ===
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-                    // DUAL STT: Start browser Speech API in parallel as backup
-                    browserTranscriptBackupRef.current = null; // Reset backup
-                    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-                    if (SpeechRecognition) {
-                        try {
-                            const backupRecognition = new SpeechRecognition();
-                            backupRecognition.continuous = true;
-                            backupRecognition.interimResults = false;
-                            backupRecognition.lang = 'en-US';
-
-                            let accumulatedText = '';
-                            backupRecognition.onresult = (event: any) => {
-                                // Accumulate results silently in background
-                                for (let i = 0; i < event.results.length; i++) {
-                                    if (event.results[i].isFinal) {
-                                        accumulatedText += (accumulatedText ? ' ' : '') + event.results[i][0].transcript.trim();
-                                    }
-                                }
-                                browserTranscriptBackupRef.current = accumulatedText;
-                            };
-
-                            backupRecognition.onerror = () => {
-                                // Silent fail - it's just a backup
-                                console.log('Browser STT backup failed (silent)');
-                            };
-
-                            // Start browser recognition in parallel
-                            backupRecognition.start();
-                            recognitionRef.current = backupRecognition; // Store for cleanup
-                        } catch (e) {
-                            console.log('Browser STT backup not available');
-                        }
-                    }
-
-                    // Continue with audio recording for Whisper
-                    const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
-                    const mediaRecorder = new MediaRecorder(stream, { mimeType });
-                    const chunks: BlobPart[] = [];
-
-                    mediaRecorder.ondataavailable = (e) => {
-                        if (e.data.size > 0) chunks.push(e.data);
-                    };
-
-                    mediaRecorder.onstop = async () => {
-                        // Clean up stream tracks immediately
-                        stream.getTracks().forEach(track => track.stop());
-
-                        // Stop browser STT backup
-                        if (recognitionRef.current) {
-                            try {
-                                recognitionRef.current.stop();
-                            } catch (e) { } // Ignore stop errors
-                        }
-
-                        const blob = new Blob(chunks, { type: mimeType }); // Use detected MIME type
-
-                        setIsTranscribing(true);
-                        try {
-                            const { transcribeAudio } = await import("@/utils/ai");
-                            let model = getSTTModel(tier); // Default model
-
-                            try {
-                                const text = await transcribeAudio(blob, model, sttLanguage);
-                                if (text && isMountedRef.current) {
-                                    setContent(prev => {
-                                        const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                        return prev + (needsSpace ? ' ' : '') + text;
-                                    });
-                                }
-                            } catch (primaryError) {
-                                // FALLBACK 1: Try Turbo if Large failed
-                                if (model === 'whisper-large-v3') {
-                                    console.warn("Primary STT failed, trying Turbo fallback...");
-                                    const turboText = await transcribeAudio(blob, 'whisper-large-v3-turbo', sttLanguage);
-                                    if (turboText && isMountedRef.current) {
-                                        setContent(prev => {
-                                            const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                            return prev + (needsSpace ? ' ' : '') + turboText;
-                                        });
-                                        return; // Success
-                                    }
-                                }
-                                throw primaryError; // Re-throw if fallback didn't catch it
-                            }
-
-                        } catch (err: any) {
-                            console.error("Transcription failed:", err);
-                            // BLOCKER FIX #2: Immediately execute browser STT on API failure
-                            if (isMountedRef.current) {
-                                setIsOffline(true); // Switch app to offline mode for future attempts
-                                showToast("Switching to Offline Voice Typing...", "warning");
-
-                                // Execute browser STT fallback immediately
-                                const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-                                if (SpeechRecognition) {
-                                    try {
-                                        const recognition = new SpeechRecognition();
-                                        recognition.continuous = false;
-                                        recognition.interimResults = false;
-                                        recognition.lang = 'en-US';
-
-                                        recognition.onresult = (event: any) => {
-                                            const text = event.results[0][0].transcript.trim();
-                                            if (text && isMountedRef.current) {
-                                                setContent(prev => {
-                                                    const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                                    return prev + (needsSpace ? ' ' : '') + text;
-                                                });
-                                            }
-                                        };
-
-                                        recognition.onerror = () => {
-                                            showToast("Voice recognition failed. Please try typing manually.", "error");
-                                        };
-
-                                        // Process the recorded audio with browser STT
-                                        // Note: We can't directly use the blob, so this is a best-effort fallback
-                                        // telling user what happened
-                                        showToast("Recording saved. Please tap the mic again to transcribe.", "info");
-                                    } catch (fallbackError) {
-                                        console.error("Browser STT fallback failed:", fallbackError);
-                                    }
-                                }
-                            }
-                        } finally {
-                            if (isMountedRef.current) setIsTranscribing(false);
-                        }
-                    };
-
-                    mediaRecorderRef.current = mediaRecorder;
-                    mediaRecorder.start();
-                    setIsRecording(true);
-
-                } catch (err) {
-                    console.error("Mic error:", err);
-                    showToast("Could not access microphone.", "error");
-                }
+                // For Native, we stop and then transcribe
+                return;
             }
+
+            // Web Fallback
+            showToast("Offline voice typing not supported.", "warning");
         }
     };
 
@@ -1497,15 +1380,35 @@ export function JournalEditor({
         startAudioRecording();
     };
 
-    const handlePhotoStart = () => {
+    const handlePhotoStart = async () => {
         triggerHaptic();
         setShowCameraMenu(false);
+
+        if (nativeMedia.isNative()) {
+            const result = await nativeMedia.getPhoto('CAMERA');
+            if (result) {
+                // Pass to existing file handler logic but with blob
+                processFile(new File([result.blob], "photo.jpg", { type: result.blob.type }));
+            }
+            return;
+        }
+
         fileInputRef.current?.click();
     };
 
-    const handleOCRStart = () => {
+    const handleOCRStart = async () => {
         triggerHaptic(15);
         setShowCameraMenu(false);
+
+        if (nativeMedia.isNative()) {
+            const result = await nativeMedia.getPhoto('CAMERA');
+            if (result) {
+                // Pass to existing OCR handler logic
+                await handleOCRUploadManual(result.blob);
+            }
+            return;
+        }
+
         ocrFileInputRef.current?.click();
     };
 
@@ -1539,6 +1442,7 @@ export function JournalEditor({
     }, [isGuest, onGuestAction, triggerHaptic]);
 
     // --- OCR Processing (HYBRID: Online + Offline Fallback) ---
+    // --- OCR Processing (HYBRID: Online + Offline Fallback) ---
     const handleOCRUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
         const file = e.target.files[0];
@@ -1554,7 +1458,6 @@ export function JournalEditor({
         if (!userId) return;
 
         // Capture initial state for race condition check
-        const startDateStr = format(currentDate, 'yyyy-MM-dd');
 
         // Validation
         if (!(await validateImageFile(file))) {
@@ -1574,90 +1477,14 @@ export function JournalEditor({
             if (signal.aborted) return;
 
             // Optimize for OCR
-            // Args: file, maxDimension (px), targetSize (KB)
             const compressedBlob = await compressImage(
                 file,
                 JOURNAL_CONFIG.OCR_IMAGE_MAX_SIZE, // 1024px
-                1024 // Target 1MB (plenty for OCR text)
+                1024 // Target 1MB
             );
 
             if (signal.aborted) return;
-
-            // Post-compression size guard
-            if (compressedBlob.size === 0) {
-                throw new Error("Image compression failed (0 bytes). Try a different image.");
-            }
-            if (compressedBlob.size > JOURNAL_CONFIG.MAX_OCR_IMAGE_SIZE_MB * 1024 * 1024) {
-                throw new Error("Image too complex for OCR. Please crop or resize.");
-            }
-
-            const processedFile = new File([compressedBlob], "ocr_temp.webp", { type: "image/webp" });
-
-            // Import and run OCR (Tiered)
-            const { extractTextOffline } = await import("@/utils/ocr-offline");
-
-            let text = "";
-
-            // Check Network Tier
-            const { detectNetworkTier } = await import("@/utils/stt-tiered");
-            const tier = detectNetworkTier();
-
-            // ABORT WRAPPER
-            const abortableOCR = <T,>(promise: Promise<T>, timeout: number) => {
-                return new Promise<T>((resolve, reject) => {
-                    const timer = setTimeout(() => reject(new Error("OCR Timeout")), timeout);
-                    signal.addEventListener("abort", () => {
-                        clearTimeout(timer);
-                        reject(new DOMException("Aborted", "AbortError"));
-                    }, { once: true });
-
-                    promise.then(res => {
-                        clearTimeout(timer);
-                        if (!signal.aborted) resolve(res);
-                    }).catch(err => {
-                        clearTimeout(timer);
-                        reject(err);
-                    });
-                });
-            };
-
-            if (tier === 'offline') {
-                if (signal.aborted) return;
-                text = await abortableOCR(extractTextOffline(processedFile), JOURNAL_CONFIG.OCR_TIMEOUT_MS);
-            } else {
-                try {
-                    // Online: performOCR takes a File object directly
-                    text = await performOCR(processedFile);
-                } catch (err: any) {
-                    // Check if it was an abort
-                    if (err.name === 'AbortError' || signal.aborted) throw err;
-
-                    console.warn("Online OCR failed, falling back to offline", err);
-                    text = await abortableOCR(extractTextOffline(processedFile), JOURNAL_CONFIG.OCR_TIMEOUT_MS);
-                }
-            }
-
-            if (signal.aborted) return;
-
-            // Verify we're still on the same date using Ref (Fresh Value)
-            const currentActiveDateStr = format(activeDateRef.current, 'yyyy-MM-dd');
-            if (currentActiveDateStr !== startDateStr) {
-                console.log("Date changed during OCR - discarding result");
-                return;
-            }
-
-            if (text && isMountedRef.current) {
-                // Sanitize: Remove control characters
-                const cleanText = text.replace(/[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
-
-                setContent(prev => {
-                    // Smart append
-                    const needsSpace = prev.length > 0 && !prev.endsWith(' ') && !prev.endsWith('\n');
-                    return prev + (needsSpace ? ' ' : '') + cleanText;
-                });
-                showToast("Text extracted from image!", "success");
-            }
-
+            await handleOCRUploadManual(compressedBlob);
         } catch (error: any) {
             if (error.name === 'AbortError' || signal.aborted) {
                 console.log("OCR aborted");
