@@ -83,12 +83,13 @@ jobs:
           
           node scripts/update-manifest.js "${{ env.VERSION_NAME }}" "${{ env.VERSION_CODE }}" "${{ steps.prep_apk.outputs.sha256 }}" "$DOWNLOAD_URL"
 
-      - name: Commit and Push Changes
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add public/version.json public/oneline.apk
-          git commit -m "chore: auto-update manifest and apk for ${{ github.ref_name }}"
-          git push origin HEAD:main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Disabling auto-commit as it causes conflicts with local manual sync flow
+      # - name: Commit and Push Changes
+      #   run: |
+      #     git config --global user.name "github-actions[bot]"
+      #     git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      #     git add public/version.json public/oneline.apk
+      #     git commit -m "chore: auto-update manifest and apk for ${{ github.ref_name }}"
+      #     git push origin HEAD:main
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

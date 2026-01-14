@@ -7,12 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "apk:sync": "powershell -Command \"Copy-Item 'android/app/release/app-release.apk' 'public/oneline.apk' -Force\"",
-    "cap:sync": "npx cap sync android",
-    "cap:open": "npx cap open android",
-    "cap:build": "npm run build && npx cap sync android",
-    "apk:hash": "powershell -Command \"certutil -hashfile android/app/build/outputs/apk/release/app-release-unsigned.apk SHA256\"",
-    "release:apk": "npm run build && npx cap sync android && cd android && ./gradlew assembleRelease && cd .. && npm run apk:hash"
+    "apk:sync": "powershell -Command \"$apk = Get-ChildItem -Path android/app/build/outputs/apk/release/*.apk, android/app/build/outputs/apk/debug/*.apk, 'One Line App/android/*.apk' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($apk) { Copy-Item $apk.FullName 'public/oneline.apk' -Force; Write-Host 'Synced:' $apk.Name } else { Write-Error 'No APK found in build outputs' }\"",
+    "version:bump": "node -e \"const f='public/version.json'; const v=JSON.parse(require('fs').readFileSync(f)); v.versionCode++; const parts=v.version.split('.'); parts[2]=parseInt(parts[2])+1; v.version=parts.join('.'); require('fs').writeFileSync(f, JSON.stringify(v, null, 4)); console.log('Bumped to ' + v.version)\""
   },
   "dependencies": {
     "@capacitor/android": "^8.0.0",
