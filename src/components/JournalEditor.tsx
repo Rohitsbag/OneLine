@@ -60,6 +60,20 @@ interface JournalEditorProps {
     sttLanguage?: string;
 }
 
+// CRASH PREVENTION: Safe localStorage wrapper for Private Mode / disabled cookies
+// Accessing localStorage directly can throw SecurityError in Safari Private Mode
+const safeStorage = {
+    getItem: (key: string): string | null => {
+        try { return localStorage.getItem(key); } catch { return null; }
+    },
+    setItem: (key: string, value: string): void => {
+        try { localStorage.setItem(key, value); } catch { /* quota exceeded or blocked */ }
+    },
+    removeItem: (key: string): void => {
+        try { localStorage.removeItem(key); } catch { }
+    }
+};
+
 // SECURITY: Magic Number Validation to prevent spoofed extensions
 const validateImageFile = async (file: File): Promise<boolean> => {
     const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif', 'image/bmp'];
@@ -127,12 +141,18 @@ const getEternalSignedUrl = async (path: string, bucket: string = 'journal-media
     try {
         // Check cache first
         const cacheKey = `signed_url_${bucket}_${path}`;
-        const cached = localStorage.getItem(cacheKey);
+        const cached = safeStorage.getItem(cacheKey);
         if (cached) {
-            const { url, expiresAt } = JSON.parse(cached);
-            // If still valid for at least 24 hours, use cached
-            if (expiresAt > Date.now() + 1000 * 60 * 60 * 24) {
-                return url;
+            try {
+                const { url, expiresAt } = JSON.parse(cached);
+                // If still valid for at least 24 hours, use cached
+                if (expiresAt > Date.now() + 1000 * 60 * 60 * 24) {
+                    return url;
+                }
+            } catch (parseError) {
+                // FIX: Corrupted cache - delete and regenerate
+                console.warn('Corrupted signed URL cache, regenerating:', parseError);
+                safeStorage.removeItem(cacheKey);
             }
         }
 
@@ -148,7 +168,7 @@ const getEternalSignedUrl = async (path: string, bucket: string = 'journal-media
 
         // Cache the URL (expires in 6 days to give buffer for refresh)
         try {
-            localStorage.setItem(cacheKey, JSON.stringify({
+            safeStorage.setItem(cacheKey, JSON.stringify({
                 url: data.signedUrl,
                 expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 6 // 6 days
             }));
@@ -221,6 +241,7 @@ export function JournalEditor({
     const cameraMenuRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const activeBlobUrlRef = useRef<string | null>(null);
+    const imageRetryAttemptedRef = useRef(false); // FIX: Prevent infinite img onError loop
     const mimeTypeRef = useRef<string>('audio/webm');
     const ocrAbortControllerRef = useRef<AbortController | null>(null);
     const lastRefreshTimeRef = useRef<number>(0);
@@ -261,7 +282,7 @@ export function JournalEditor({
             }
 
             // Fallback: Check for cached user (Offline Mode)
-            const cachedUserRaw = localStorage.getItem('cached_user');
+            const cachedUserRaw = safeStorage.getItem('cached_user');
             if (cachedUserRaw) {
                 try {
                     const cachedUser = JSON.parse(cachedUserRaw);
@@ -626,11 +647,13 @@ export function JournalEditor({
     }, [currentDate, userId]);
 
     // BLOCKER FIX #3: Reset history on date change to prevent cross-date undo
+    // FIX: Only reset on date change, NOT on content change (was breaking undo)
     useEffect(() => {
         // Reset history stack to current state when date changes
-        setHistory([{ content, image: imagePath, audio: audioPath }]);
+        // Use refs to get current values without adding them to dependencies
+        setHistory([{ content: contentRef.current, image: imagePathRef.current, audio: audioPathRef.current }]);
         setHistoryIndex(0);
-    }, [currentDate, content, imagePath, audioPath]);
+    }, [currentDate]); // ONLY currentDate - content changes handled by separate history effect
 
     // VISIBILITY CHANGE & FOCUS HANDLER
     // Refresh signed URLs when app comes to foreground, but debounce heavily
@@ -666,6 +689,9 @@ export function JournalEditor({
     // Image Signed URL - ETERNAL 7-DAY URLs with cache
     useEffect(() => {
         let cancelled = false;
+        // FIX: Reset retry counter on imagePath change for fresh retry logic
+        imageRetryAttemptedRef.current = false;
+
         const loadSignedUrl = async () => {
             if (!imagePath) {
                 if (isMountedRef.current && !cancelled) setDisplayUrl(null);
@@ -737,7 +763,7 @@ export function JournalEditor({
         // Helper to safe-set localStorage (Quota Handling with LRU)
         const safeSetItem = (key: string, value: string) => {
             try {
-                localStorage.setItem(key, value);
+                safeStorage.setItem(key, value);
             } catch (e: any) {
                 if (e.name === 'QuotaExceededError') {
                     console.warn("LocalStorage full, cleaning up oldest entries...");
@@ -747,7 +773,7 @@ export function JournalEditor({
                             .filter(k => k.startsWith('entry_cache_'))
                             .map(k => {
                                 try {
-                                    const val = JSON.parse(localStorage.getItem(k) || '{}');
+                                    const val = JSON.parse(safeStorage.getItem(k) || '{}');
                                     return { key: k, time: val.updated_at ? new Date(val.updated_at).getTime() : 0 };
                                 } catch {
                                     return { key: k, time: 0 };
@@ -757,10 +783,10 @@ export function JournalEditor({
 
                         // Remove oldest 20% or at least 5
                         const countToRemove = Math.max(5, Math.floor(items.length * 0.2));
-                        items.slice(0, countToRemove).forEach(item => localStorage.removeItem(item.key));
+                        items.slice(0, countToRemove).forEach(item => safeStorage.removeItem(item.key));
 
                         // Retry set
-                        localStorage.setItem(key, value);
+                        safeStorage.setItem(key, value);
                     } catch (retryE) {
                         console.error("Cache write failed even after cleanup", retryE);
                     }
@@ -781,7 +807,7 @@ export function JournalEditor({
 
         // Helper to save to pending sync queue (for server sync)
         const saveOffline = () => {
-            const existingRaw = localStorage.getItem('pending_journal_sync');
+            const existingRaw = safeStorage.getItem('pending_journal_sync');
             const existing = existingRaw ? JSON.parse(existingRaw) : {};
             existing[dateStr] = {
                 content: currentContent,
@@ -889,8 +915,9 @@ export function JournalEditor({
 
         return () => {
             clearTimeout(timeoutId);
-            // CRITICAL (STALE CLOSURE FIX): Use Refs to ensure we save the LATEST text during cleanup
-            if (isDirtyRef.current && userId && contentDateRef.current === dateStr) {
+            // FIX: Use closure-captured `dateStr` (not ref) - this effect belongs to this specific date
+            // Using ref was risky: if fetchEntry for new date runs before cleanup, ref has wrong date
+            if (isDirtyRef.current && userId) {
                 saveEntry(dateStr, contentRef.current, imagePathRef.current, audioPathRef.current);
             }
         };
@@ -975,6 +1002,12 @@ export function JournalEditor({
     const processFile = useCallback(async (file: File) => {
         if (!userId) return;
 
+        // FIX: Offline check - media uploads require network
+        if (!navigator.onLine) {
+            showToast("Cannot upload media while offline. Please reconnect to upload images.", "warning");
+            return;
+        }
+
         if (!(await validateImageFile(file))) {
             showToast("Invalid image file. Please upload a valid image (JPEG, PNG, WebP, HEIC).", "error");
             return;
@@ -1007,7 +1040,12 @@ export function JournalEditor({
                 throw new Error("Image too complex. Please use a smaller image.");
             }
 
-            const fileName = `${userId}/${Date.now()}-${file.name.split('.')[0]}.webp`;
+            // SECURITY: Use UUID-only filename to prevent path injection attacks
+            // FIX: Add fallback for old browsers (Safari < 15.4) or HTTP contexts
+            const uuid = typeof crypto?.randomUUID === 'function'
+                ? crypto.randomUUID().slice(0, 8)
+                : Math.random().toString(36).slice(2, 10);
+            const fileName = `${userId}/${Date.now()}-${uuid}.webp`;
             const compressedFile = new File([compressedBlob], fileName, { type: 'image/webp' });
 
             const { error: uploadError } = await supabase.storage
@@ -1034,7 +1072,12 @@ export function JournalEditor({
                 if (file.size < JOURNAL_CONFIG.MAX_COMPRESSED_IMAGE_SIZE_MB * 1024 * 1024) {
                     console.warn("Compression failed, using original file as fallback.", error);
 
-                    const fileName = `${userId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+                    // SECURITY: Use UUID-only filename for fallback too
+                    // FIX: Add fallback for old browsers (Safari < 15.4) or HTTP contexts
+                    const uuidFallback = typeof crypto?.randomUUID === 'function'
+                        ? crypto.randomUUID().slice(0, 8)
+                        : Math.random().toString(36).slice(2, 10);
+                    const fileName = `${userId}/${Date.now()}-${uuidFallback}.${file.name.split('.').pop() || 'jpg'}`;
                     const { error: uploadError } = await supabase.storage
                         .from('journal-media-private')
                         .upload(fileName, file);
@@ -1131,6 +1174,12 @@ export function JournalEditor({
 
     // --- Shared Upload Handlers ---
     const handleVoiceNote = async (audioBlob: Blob) => {
+        // FIX: Offline check - media uploads require network
+        if (!navigator.onLine) {
+            showToast("Cannot upload voice note while offline. Please reconnect.", "warning");
+            return;
+        }
+
         const type = audioBlob.type || 'audio/webm';
         const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm';
         const fileName = `${userId}/audio-${Date.now()}.${ext}`;
@@ -1574,9 +1623,18 @@ export function JournalEditor({
             mediaRecorder.onstop = async () => {
                 // This runs when we call .stop() in the STOP block above
                 const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-                const { transcribeAudio } = await import("@/utils/ai");
+
+                // CRITICAL: Set transcribing state at START of transcription
+                if (isMountedRef.current) setIsTranscribing(true);
+
+                // FIX: Declare outside try so it's accessible in nested catch blocks
+                let transcribeAudio: ((blob: Blob, model: string, lang?: string) => Promise<string>) | null = null;
 
                 try {
+                    // FIX: Move import INSIDE try block so finally runs if import fails
+                    const aiModule = await import("@/utils/ai");
+                    transcribeAudio = aiModule.transcribeAudio;
+
                     // ATTEMPT 1: Whisper Large v3 (Cloud)
                     console.log("Dual STT: Trying Whisper Large...");
                     const text = await transcribeAudio(audioBlob, 'whisper-large-v3', sttLanguage);
@@ -1593,6 +1651,9 @@ export function JournalEditor({
 
                     // ATTEMPT 2: Whisper Turbo (Cloud - Faster/Fallback)
                     try {
+                        // If import failed above, transcribeAudio is null - go straight to offline fallback
+                        if (!transcribeAudio) throw new Error("Import failed, skip to offline");
+
                         console.log("Dual STT: Trying Whisper Turbo...");
                         const text = await transcribeAudio(audioBlob, 'whisper-large-v3-turbo', sttLanguage);
                         if (text && isMountedRef.current) {
@@ -2002,17 +2063,30 @@ export function JournalEditor({
                                 src={displayUrl}
                                 alt={`Journal entry for ${format(currentDate, 'MMMM d, yyyy')}`}
                                 className="w-full h-auto max-h-[500px] object-contain transition-transform duration-700 hover:scale-[1.02]"
-                                onError={async () => {
-                                    // AUTO-REFRESH: Try to regenerate eternal URL on error
-                                    if (imagePath && !imageLoadError) {
+                                onError={() => {
+                                    // FIX: Use sync handler to avoid stale state, limit to 1 retry
+                                    // imageRetryAttemptedRef prevents infinite loop
+                                    // FIX: Capture path to prevent race condition on navigation
+                                    const capturedPath = imagePath;
+                                    if (capturedPath && !imageLoadError && !imageRetryAttemptedRef.current) {
+                                        imageRetryAttemptedRef.current = true;
                                         try {
-                                            localStorage.removeItem(`signed_url_journal-media-private_${imagePath}`);
+                                            safeStorage.removeItem(`signed_url_journal-media-private_${capturedPath}`);
                                         } catch { }
-                                        const newUrl = await getEternalSignedUrl(imagePath);
-                                        if (newUrl && isMountedRef.current) {
-                                            setDisplayUrl(newUrl);
-                                            return; // Don't show error if refresh worked
-                                        }
+                                        // Call async function separately
+                                        getEternalSignedUrl(capturedPath).then(newUrl => {
+                                            // FIX: Only update if path hasn't changed during async operation
+                                            if (newUrl && isMountedRef.current && imagePathRef.current === capturedPath) {
+                                                setDisplayUrl(newUrl);
+                                            } else if (isMountedRef.current && imagePathRef.current === capturedPath) {
+                                                setImageLoadError(true);
+                                            }
+                                        }).catch(() => {
+                                            if (isMountedRef.current && imagePathRef.current === capturedPath) {
+                                                setImageLoadError(true);
+                                            }
+                                        });
+                                        return;
                                     }
                                     setImageLoadError(true);
                                 }}
