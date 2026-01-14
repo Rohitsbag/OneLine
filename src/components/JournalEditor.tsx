@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Mic, Camera, X, Square, AudioLines, ScanText } from "lucide-react";
+import { ChevronLeft, ChevronRight, Mic, Camera, X, Square, AudioLines, ScanText, Loader2 } from "lucide-react";
 import { format, addDays, subDays, isSameDay } from "date-fns";
 import { supabase } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
@@ -170,6 +170,8 @@ export function JournalEditor({
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
     const recognitionRef = useRef<SpeechRecognition | null>(null);
+    const webSpeechResultRef = useRef<string>(""); // Store Web Speech API result
+    const isWebSpeechActiveRef = useRef<boolean>(false);
     const contentRef = useRef(content);
     const imagePathRef = useRef(imagePath);
     const audioPathRef = useRef(audioPath);
@@ -277,6 +279,52 @@ export function JournalEditor({
 
         };
     }, []); // Run ONCE on mount/unmount
+
+    // --- Dual STT Initialization (Web Speech API) ---
+    useEffect(() => {
+        if (typeof window !== 'undefined') {
+            // Enable for BOTH Web and Native (Android WebView supports SpeechRecognition)
+            // @ts-ignore
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (SpeechRecognition) {
+                const recognition = new SpeechRecognition();
+                recognition.continuous = true;
+                recognition.interimResults = true;
+                recognition.lang = sttLanguage === "Auto" ? "en-US" : (sttLanguage === "Hindi" ? "hi-IN" : "en-US"); // Basic mapping
+
+                recognition.onresult = (event: SpeechRecognitionEvent) => {
+                    let finalTranscript = '';
+                    // @ts-ignore
+                    for (let i = event.resultIndex; i < event.results.length; ++i) {
+                        // @ts-ignore
+                        if (event.results[i].isFinal) {
+                            // @ts-ignore
+                            finalTranscript += event.results[i][0].transcript;
+                        }
+                    }
+                    if (finalTranscript) {
+                        webSpeechResultRef.current += (webSpeechResultRef.current ? ' ' : '') + finalTranscript;
+                    }
+                };
+
+                // @ts-ignore
+                recognition.onerror = (event) => {
+                    // Ignore transient network errors or expected aborts
+                    if (event.error === 'network' || event.error === 'aborted' || event.error === 'no-speech') {
+                        return;
+                    }
+                    console.warn("Web Speech API Error:", event);
+                    isWebSpeechActiveRef.current = false;
+                };
+
+                recognition.onend = () => {
+                    isWebSpeechActiveRef.current = false;
+                };
+
+                recognitionRef.current = recognition;
+            }
+        }
+    }, [sttLanguage]);
 
     // Separate effect for URL cleanup avoids re-running global cleanup
     useEffect(() => {
@@ -1302,6 +1350,13 @@ export function JournalEditor({
             // STOP RECORDING
             if (nativeMedia.isNative()) {
                 const result = await nativeMedia.nativeVoice.stop();
+
+                // Stop Backup (Web Speech)
+                if (recognitionRef.current && isWebSpeechActiveRef.current) {
+                    recognitionRef.current.stop();
+                    isWebSpeechActiveRef.current = false;
+                }
+
                 setIsRecording(false);
                 if (recordingTimerRef.current) {
                     clearInterval(recordingTimerRef.current);
@@ -1321,7 +1376,18 @@ export function JournalEditor({
                         }
                     } catch (err) {
                         console.error("Native transcription failed:", err);
-                        showToast("Transcription failed.", "error");
+
+                        // FALLBACK: Use Web Speech API Result
+                        if (webSpeechResultRef.current && webSpeechResultRef.current.trim().length > 0) {
+                            console.log("Using Offline Fallback (Native)...");
+                            showToast("Network failed. Used offline backup.", "warning");
+                            setContent(prev => {
+                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                return prev + (needsSpace ? ' ' : '') + webSpeechResultRef.current;
+                            });
+                        } else {
+                            showToast("Transcription failed. No offline backup available.", "error");
+                        }
                     } finally {
                         setIsTranscribing(false);
                     }
@@ -1329,36 +1395,196 @@ export function JournalEditor({
                 return;
             }
 
+            // --- STOP WEB RECORDING (Dual Strategy) ---
+
+            // 1. Stop Audio Recorder (for Whisper)
             if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+                mediaRecorderRef.current.requestData(); // Flush last chunk
                 mediaRecorderRef.current.stop();
             }
+
+            // 2. Stop Web Speech API (Background)
+            if (recognitionRef.current && isWebSpeechActiveRef.current) {
+                recognitionRef.current.stop();
+                isWebSpeechActiveRef.current = false;
+            }
+
             setIsRecording(false);
             if (recordingTimerRef.current) {
                 clearInterval(recordingTimerRef.current);
                 recordingTimerRef.current = null;
             }
+
+            // 3. Process Result (Fallback Chain)
+            setIsTranscribing(true);
+            try {
+                // Wait a moment for MediaRecorder "onstop" to fire and create blob
+                // We handle the actual API call in the 'onstop' handler of MediaRecorder below
+                // But we need to pass the "intent" that this was a transcription, not a voice note.
+                // Refactor: We can't rely on 'onstop' for transcription because 'onstop' is also used for Voice Notes.
+                // Current architecture uses 'isRecordingAudio' vs 'isRecording' state to differentiate.
+                // 'isRecording' = STT Mode. 'isRecordingAudio' = Voice Note Mode.
+
+                // The 'mediaRecorder.onstop' is currently shared? No, let's check.
+                // Ah, 'startAudioRecording' creates a NEW MediaRecorder instance every time. 
+                // BUT 'toggleRecording' logic below (START) re-uses or creates a new one?
+                // Let's look at START logic below.
+
+            } catch (err) {
+                console.error("Transcription stop error", err);
+                setIsTranscribing(false);
+            }
         } else {
-            // START RECORDING
-            if (nativeMedia.isNative()) {
-                const hasPerm = await nativeMedia.nativeVoice.requestPermission();
-                if (!hasPerm) {
-                    showToast("Microphone permission denied.", "error");
+            // --- START RECORDING ---
+            try {
+                if (nativeMedia.isNative()) {
+                    // Start Native Recorder
+                    await nativeMedia.nativeVoice.start();
+
+                    // Start Backup (Web Speech)
+                    // We wrap in try/catch to ensure native recording continues even if backup fails (e.g. mic busy)
+                    if (recognitionRef.current) {
+                        try {
+                            webSpeechResultRef.current = "";
+                            recognitionRef.current.start();
+                            isWebSpeechActiveRef.current = true;
+                        } catch (e) {
+                            console.warn("Could not start offline backup:", e);
+                        }
+                    }
+
+                    setIsRecording(true);
+                    // Start Timer...
+                    setRecordingDuration(0);
+                    recordingTimerRef.current = setInterval(() => {
+                        if (isMountedRef.current) {
+                            setRecordingDuration(prev => {
+                                if (prev >= JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS) {
+                                    toggleRecording(); // Auto-stop
+                                    showToast("Recording limit reached (5 mins).", "info");
+                                    return JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS;
+                                }
+                                return prev + 1;
+                            });
+                        }
+                    }, 1000);
                     return;
                 }
-
-                await nativeMedia.nativeVoice.start();
-                setIsRecording(true);
-                setRecordingDuration(0);
-                recordingTimerRef.current = setInterval(() => {
-                    setRecordingDuration(prev => prev + 1);
-                }, 1000);
-
-                // For Native, we stop and then transcribe
+            } catch (error: any) {
+                console.error("Error starting native audio:", error);
+                showToast("Could not start recording.", "error");
                 return;
             }
+        }
 
-            // Web Fallback
-            showToast("Offline voice typing not supported.", "warning");
+        // --- START WEB RECORDING (Dual Strategy) ---
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            showToast("Microphone not supported in this browser.", "error");
+            return;
+        }
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+            // 1. Start Audio Recorder (Whisper)
+            let mimeType = 'audio/webm';
+            if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm')) {
+                mimeType = 'audio/webm';
+            } else if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/mp4')) {
+                mimeType = 'audio/mp4'; // Safari
+            }
+
+            const mediaRecorder = new MediaRecorder(stream, { mimeType });
+            mediaRecorderRef.current = mediaRecorder;
+            audioChunksRef.current = [];
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) audioChunksRef.current.push(event.data);
+            };
+
+            mediaRecorder.onstop = async () => {
+                // This runs when we call .stop() in the STOP block above
+                const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+                const { transcribeAudio } = await import("@/utils/ai");
+
+                try {
+                    // ATTEMPT 1: Whisper Large v3 (Cloud)
+                    console.log("Dual STT: Trying Whisper Large...");
+                    const text = await transcribeAudio(audioBlob, 'whisper-large-v3', sttLanguage);
+                    if (text && isMountedRef.current) {
+                        setContent(prev => {
+                            const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                            return prev + (needsSpace ? ' ' : '') + text;
+                        });
+                        showToast("Transcribed with Whisper (High Quality)", "success");
+                        return; // Success!
+                    }
+                } catch (err: any) {
+                    console.warn("Whisper Large failed:", err);
+
+                    // ATTEMPT 2: Whisper Turbo (Cloud - Faster/Fallback)
+                    try {
+                        console.log("Dual STT: Trying Whisper Turbo...");
+                        const text = await transcribeAudio(audioBlob, 'whisper-large-v3-turbo', sttLanguage);
+                        if (text && isMountedRef.current) {
+                            setContent(prev => {
+                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                return prev + (needsSpace ? ' ' : '') + text;
+                            });
+                            showToast("Transcribed with Whisper Turbo", "success");
+                            return; // Success!
+                        }
+                    } catch (turboErr: any) {
+                        console.warn("Whisper Turbo failed:", turboErr);
+
+                        // ATTEMPT 3: Web Speech API (Local / Background Result)
+                        // We use the result we captured in background 'webSpeechResultRef'
+                        console.log("Dual STT: Using Browser Fallback...");
+                        if (webSpeechResultRef.current && isMountedRef.current) {
+                            const backupText = webSpeechResultRef.current;
+                            setContent(prev => {
+                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                return prev + (needsSpace ? ' ' : '') + backupText;
+                            });
+                            showToast("Offline Fallback Used (Browser Speech)", "warning");
+                        } else {
+                            showToast("Transcription failed. Please try again.", "error");
+                        }
+                    }
+                } finally {
+                    if (isMountedRef.current) setIsTranscribing(false);
+                    stream.getTracks().forEach(track => track.stop()); // Cleanup mic
+                }
+            };
+
+            mediaRecorder.start();
+
+            // 2. Start Web Speech API (Background)
+            webSpeechResultRef.current = ""; // Reset buffer
+            if (recognitionRef.current && !isWebSpeechActiveRef.current) {
+                try {
+                    recognitionRef.current.start();
+                    isWebSpeechActiveRef.current = true;
+                } catch (e: any) {
+                    // Ignore "already started" errors, but log others
+                    if (e.name !== 'InvalidStateError') {
+                        console.warn("Failed to start Web Speech API", e);
+                    } else {
+                        isWebSpeechActiveRef.current = true; // Assume active if error said so
+                    }
+                }
+            }
+
+            setIsRecording(true);
+            setRecordingDuration(0);
+            recordingTimerRef.current = setInterval(() => {
+                setRecordingDuration(prev => prev + 1);
+            }, 1000);
+
+        } catch (error: any) {
+            console.error("Error starting STT:", error);
+            showToast("Could not access microphone.", "error");
         }
     };
 
@@ -1403,8 +1629,31 @@ export function JournalEditor({
         if (nativeMedia.isNative()) {
             const result = await nativeMedia.getPhoto('CAMERA');
             if (result) {
-                // Pass to existing OCR handler logic
-                await handleOCRUploadManual(result.blob);
+                // NATIVE OFFLINE OCR (MLKit)
+                setIsProcessingOCR(true);
+                try {
+                    const { recognizeText } = await import("@/utils/native-media"); // Import locally to avoid circular deps if any
+                    // Note: result.url is a local filesystem path on native
+                    const textArray = await recognizeText(result.url);
+                    const text = textArray.join('\n');
+
+                    if (text && text.trim().length > 0) {
+                        if (isMountedRef.current) {
+                            setContent(prev => {
+                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                return prev + (needsSpace ? ' ' : '') + text;
+                            });
+                            showToast("Text scanned (Offline Mode)", "success");
+                        }
+                    } else {
+                        showToast("No text found.", "warning");
+                    }
+                } catch (e) {
+                    console.error("Native OCR Error:", e);
+                    showToast("Text scan failed.", "error");
+                } finally {
+                    setIsProcessingOCR(false);
+                }
             }
             return;
         }
@@ -1826,7 +2075,7 @@ export function JournalEditor({
                         )}
                     >
                         {isProcessingOCR ? (
-                            <Camera className="w-6 h-6 text-blue-500 animate-pulse" />
+                            <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
                         ) : (
                             <Camera className={cn("w-6 h-6 text-zinc-600 transition-colors", hoverClass)} />
                         )}

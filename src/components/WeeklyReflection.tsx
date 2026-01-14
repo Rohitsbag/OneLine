@@ -2,14 +2,16 @@ import { Sparkles, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { supabase } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
-import { generateWeeklyReflection } from "@/utils/ai";
+import { generateContextualSummary } from "@/utils/ai";
 import { ACCENT_COLORS } from "@/constants/colors";
+import { subDays, format } from "date-fns";
 
 interface WeeklyReflectionProps {
     accentColor?: string;
+    date?: Date;
 }
 
-export function WeeklyReflection({ accentColor = "bg-indigo-500" }: WeeklyReflectionProps) {
+export function WeeklyReflection({ accentColor = "bg-indigo-500", date = new Date() }: WeeklyReflectionProps) {
     const [reflection, setReflection] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
 
@@ -33,7 +35,38 @@ export function WeeklyReflection({ accentColor = "bg-indigo-500" }: WeeklyReflec
                 return;
             }
 
-            const response = await generateWeeklyReflection(session.user.id);
+            // FILTER: Last 7 Days (Text Only)
+            const endDateStr = format(date, 'yyyy-MM-dd');
+            const startDateStr = format(subDays(date, 7), 'yyyy-MM-dd');
+
+            const { data: entries, error } = await supabase
+                .from('entries')
+                .select('date, content')
+                .eq('user_id', session.user.id)
+                .gte('date', startDateStr)
+                .lte('date', endDateStr)
+                .order('date', { ascending: true });
+
+            if (error) throw error;
+
+            if (!entries || entries.length === 0) {
+                setReflection("No journal entries found in the last 7 days.");
+                return;
+            }
+
+            // Context: Text only, ignore images/audio columns (already select('date, content') does this implicitly)
+            // Explicitly filter empty content just in case
+            const contextText = entries
+                .filter(e => e.content && e.content.trim().length > 0)
+                .map(e => `[${e.date}]: ${e.content}`)
+                .join('\n');
+
+            if (contextText.length === 0) {
+                setReflection("No text entries found to summarize (images/audio ignored).");
+                return;
+            }
+
+            const response = await generateContextualSummary(contextText);
             setReflection(response);
 
         } catch (e) {

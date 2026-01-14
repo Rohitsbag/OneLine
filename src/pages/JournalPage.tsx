@@ -32,7 +32,7 @@ export function JournalPage({
     const [showTimeline, setShowTimeline] = useState(false);
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [userId, setUserId] = useState<string | null>(null);
-    const [aiEnabled, setAiEnabled] = useState(true);
+    const [aiEnabled, setAiEnabled] = useState(false); // DEFAULT: OFF as requested
     const [sttLanguage, setSttLanguage] = useState("Auto");
     const [notificationsEnabled, setNotificationsEnabled] = useState(false);
     const [notificationTime, setNotificationTime] = useState("20:00");
@@ -310,7 +310,7 @@ export function JournalPage({
 
                 {aiEnabled && (
                     <div className="w-full px-4 pb-12">
-                        <WeeklyReflection accentColor={accentColor} key={`reflection-${refreshTrigger}`} />
+                        <WeeklyReflection accentColor={accentColor} key={`reflection-${refreshTrigger}`} date={selectedDate} />
                     </div>
                 )}
             </div>

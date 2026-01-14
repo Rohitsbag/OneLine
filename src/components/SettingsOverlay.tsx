@@ -105,17 +105,28 @@ export function SettingsOverlay({
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/70 backdrop-blur-sm p-4 md:p-6" onClick={onClose}>
+        <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 dark:bg-black/70 backdrop-blur-sm p-4 md:p-6"
+            onClick={onClose}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
+        >
             <div className="bg-white dark:bg-[#0a0a0a] border border-zinc-200 dark:border-zinc-800 rounded-[2.5rem] w-full max-w-xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-300" onClick={e => e.stopPropagation()}>
 
                 {/* Header - More Compact */}
-                <div className="px-6 py-4 border-b border-zinc-100 dark:border-zinc-800/50 flex items-center justify-between shrink-0">
-                    <div className="flex items-center gap-3">
-                        <button onClick={onClose} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
-                            <X className="w-5 h-5 text-zinc-500" />
-                        </button>
-                        <h2 className="text-lg font-bold text-zinc-900 dark:text-white tracking-tight">Settings</h2>
-                    </div>
+                <div className="px-6 py-4 border-b border-zinc-100 dark:border-zinc-800/50 flex items-center justify-between shrink-0 relative z-50">
+                    <h2 className="text-lg font-bold text-zinc-900 dark:text-white tracking-tight">Settings</h2>
+                    <button
+                        type="button"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onClose();
+                        }}
+                        className="w-10 h-10 flex items-center justify-center -mr-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors cursor-pointer active:scale-95 touch-manipulation"
+                        aria-label="Close Settings"
+                    >
+                        <X className="w-5 h-5 text-zinc-500 pointer-events-none" />
+                    </button>
                 </div>
 
                 {/* Scrollable Content - Tighter Padding */}
@@ -145,6 +156,33 @@ export function SettingsOverlay({
                                 <div className="text-zinc-900 dark:text-zinc-100 font-bold truncate">{email || "Loading..."}</div>
                             </div>
                         </div>
+
+                        {/* Intelligence Section (AI Summary) */}
+                        <section>
+                            <div className="flex items-center justify-between px-1 mb-3">
+                                <label className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">Intelligence</label>
+                                <button
+                                    onClick={() => _onToggleAi(!_aiEnabled)}
+                                    className={cn(
+                                        "w-10 h-5 rounded-full relative transition-all duration-300 p-0.5",
+                                        _aiEnabled ? accentColor : "bg-zinc-200 dark:bg-zinc-800"
+                                    )}
+                                >
+                                    <div className={cn("w-4 h-4 rounded-full bg-white shadow-sm transition-all", _aiEnabled ? "translate-x-5" : "translate-x-0")} />
+                                </button>
+                            </div>
+                            <div className="p-4 rounded-[2rem] bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-100 dark:border-zinc-800/50 flex items-start gap-4">
+                                <div className="p-2.5 bg-white dark:bg-zinc-800 rounded-2xl shadow-sm ring-1 ring-zinc-200 dark:ring-zinc-700">
+                                    <span className="text-lg">✨</span>
+                                </div>
+                                <div className="space-y-1 pt-0.5">
+                                    <div className="text-sm font-bold text-zinc-900 dark:text-zinc-100">Weekly AI Summary</div>
+                                    <p className="text-xs text-zinc-500 leading-relaxed font-medium">
+                                        Get a concise, text-only summary of your week's journal entries every Sunday.
+                                    </p>
+                                </div>
+                            </div>
+                        </section>
 
                         {/* Appearance Section */}
                         <section>

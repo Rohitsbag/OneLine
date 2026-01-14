@@ -1,5 +1,5 @@
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
-import { VoiceRecorder } from '@capacitor/voice-recorder';
+import { VoiceRecorder } from 'capacitor-voice-recorder';
 import { Capacitor } from '@capacitor/core';
 
 export const isNative = () => Capacitor.isNativePlatform();
@@ -69,3 +69,22 @@ export const nativeVoice = {
         return null;
     }
 };
+
+/**
+ * Native Offline OCR (MLKit) via @capacitor-community/text-recognition
+ */
+import { TextRecognition } from '@capacitor-community/text-recognition';
+
+export async function recognizeText(imageUrl: string): Promise<string[]> {
+    if (!isNative()) return [];
+
+    try {
+        const data = await TextRecognition.recognize({
+            filename: imageUrl
+        });
+        return data.text ? [data.text] : [];
+    } catch (e) {
+        console.error("Native OCR failed:", e);
+        return [];
+    }
+}

@@ -53,7 +53,7 @@ export async function POST(request: Request) {
             messages: [{ role: 'user', content: prompt }],
             model: 'llama3-8b-8192', // Fast, good quality
             temperature: 0.7,
-            max_tokens: 300,
+            max_tokens: 500,
         });
 
         const reflection = chatCompletion.choices[0]?.message?.content || "Could not generate reflection.";

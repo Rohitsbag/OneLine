@@ -288,7 +288,7 @@ export async function generateWeeklyReflection(userId: string): Promise<string> 
                     model: "meta-llama/llama-4-maverick-17b-128e-instruct",
                     messages: [{ role: "user", content: prompt }],
                     temperature: 0.7,
-                    max_tokens: 300,
+                    max_tokens: 500,
                 });
 
                 const result = await Promise.race([aiPromise, timeoutPromise]);
@@ -314,5 +314,53 @@ export async function generateWeeklyReflection(userId: string): Promise<string> 
             return "The AI is taking a moment to breathe. Please check back in a few minutes for your reflection.";
         }
         return "Your reflection is currently resting. Try refreshing the page in a moment.";
+    }
+}
+
+// NEW: Contextual Summary for "Last 7 Days"
+export async function generateContextualSummary(contextText: string): Promise<string> {
+    if (!contextText || contextText.trim().length === 0) {
+        return "Not enough entries to generate a summary.";
+    }
+
+    const systemPrompt = `You are a concise journal assistant. Summarize the provided journal entries in strictly under 3 sentences. The word count must be between 30 and 50 words. Focus ONLY on the text content provided. Ignore any references to audio or images. Write in the first person.`;
+    const userPrompt = `Here are my journal entries for the last 7 days:\n\n${contextText}`;
+
+    const callAI = async (model: string, signal: AbortSignal) => {
+        const response = await fetch(AI_PROXY_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                action: "chat",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                model: model
+            }),
+            signal
+        });
+        if (!response.ok) throw new Error(`Model ${model} failed`);
+        const data = await response.json();
+        return data.text;
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s total timeout
+
+    try {
+        // MAIN: openai/gpt-oss-20b
+        try {
+            return await callAI("openai/gpt-oss-20b", controller.signal) || "Could not generate summary.";
+        } catch (mainError) {
+            console.warn("Main AI Summary model failed, trying fallback...", mainError);
+            // FALLBACK: llama-3.1-8b-instant
+            return await callAI("llama-3.1-8b-instant", controller.signal) || "Could not generate summary.";
+        }
+    } catch (error) {
+        console.error("All AI Summary models failed:", error);
+        return "Summary currently unavailable.";
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
