@@ -1657,51 +1657,12 @@ export function JournalEditor({
         }
     };
 
-    // --- STT Logic (Tiered: Whisper Online / WebSpeech Offline) ---
+    // --- STT Logic (Web Speech API Only - No Whisper) ---
     const [isTranscribing, setIsTranscribing] = useState(false);
 
     const toggleRecording = useCallback(async () => {
         if (isRecording) {
-            // STOP RECORDING
-            if (nativeMedia.isNative()) {
-                const result = await nativeMedia.nativeVoice.stop();
-
-                // Stop Backup (Web Speech)
-                if (recognitionRef.current && isWebSpeechActiveRef.current) {
-                    recognitionRef.current.stop();
-                    isWebSpeechActiveRef.current = false;
-                }
-
-                setIsRecording(false);
-                if (recordingTimerRef.current) {
-                    clearInterval(recordingTimerRef.current);
-                    recordingTimerRef.current = null;
-                }
-
-                if (result) {
-                    setIsTranscribing(true);
-                    try {
-                        const text = webSpeechResultRef.current;
-                        if (text && text.trim().length > 0 && isMountedRef.current) {
-                            setContent(prev => {
-                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                return prev + (needsSpace ? ' ' : '') + text.trim();
-                            });
-                            showToast("Transcribed (Native Speech)", "success");
-                        } else {
-                            showToast("No speech detected.", "warning");
-                        }
-                    } catch (err) {
-                        console.error("Transcription processing failed:", err);
-                        showToast("Transcription failed.", "error");
-                    } finally {
-                        setIsTranscribing(false);
-                    }
-                }
-                return;
-            }
-
-            // --- WEB STOP RECORDING (Browser Speech API Only) ---
+            // --- STOP RECORDING (Web Speech API Only) ---
             if (recognitionRef.current && isWebSpeechActiveRef.current) {
                 try {
                     recognitionRef.current.stop();
@@ -1742,56 +1703,19 @@ export function JournalEditor({
                 }
             }, 500);
         } else {
-            // --- START RECORDING ---
+            // --- START RECORDING (Web Speech API Only) ---
 
             // ROBUSTNESS: Ensure we have a clean state before starting
             webSpeechResultRef.current = "";
 
-            if (nativeMedia.isNative()) {
-                try {
-                    // Start Native Recorder
-                    await nativeMedia.nativeVoice.start();
-
-                    // Start Backup (Web Speech)
-                    if (recognitionRef.current) {
-                        try {
-                            recognitionRef.current.start();
-                            isWebSpeechActiveRef.current = true;
-                        } catch (e) {
-                            console.warn("Could not start offline backup:", e);
-                        }
-                    }
-
-                    setIsRecording(true);
-                    setRecordingDuration(0);
-                    recordingTimerRef.current = setInterval(() => {
-                        if (isMountedRef.current) {
-                            setRecordingDuration(prev => {
-                                if (prev >= JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS) {
-                                    toggleRecording(); // Auto-stop
-                                    showToast("Recording limit reached (5 mins).", "info");
-                                    return JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS;
-                                }
-                                return prev + 1;
-                            });
-                        }
-                    }, 1000);
-                    return;
-                } catch (error: any) {
-                    console.error("Error starting native audio:", error);
-                    showToast("Could not start recording.", "error");
-                    return;
-                }
-            }
-
-            // --- WEB START RECORDING (Browser Speech API Only) ---
+            // Check for Web Speech API support
             if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
-                showToast("Speech recognition not supported in this browser.", "error");
+                showToast("Speech recognition not supported on this device.", "error");
                 return;
             }
 
             try {
-                // Check for mic permission first
+                // Request mic permission first (required for WebView on Android)
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
                 if (recognitionRef.current) {
