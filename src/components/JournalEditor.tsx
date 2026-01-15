@@ -9,6 +9,7 @@ import { ACCENT_COLORS } from "@/constants/colors";
 import { useToast } from "./Toast";
 import { JOURNAL_CONFIG } from "@/constants/journal";
 import * as nativeMedia from "@/utils/native-media";
+import { Filesystem, Directory } from '@capacitor/filesystem';
 
 // Fix Types for SpeechRecognition
 interface SpeechRecognitionEvent extends Event {
@@ -451,6 +452,63 @@ export function JournalEditor({
                 const entry = pendingEntries[dateKey];
                 const localTimestamp = entry.updated_at ? new Date(entry.updated_at).getTime() : Date.now();
 
+                // OFFLINE MEDIA SYNC: Detect and upload local files
+                let finalImagePath = entry.image_url;
+                let finalAudioPath = entry.audio_url;
+
+                if (nativeMedia.isNative()) {
+                    // Sync Image
+                    if (entry.image_url?.startsWith('local://')) {
+                        try {
+                            const fileName = entry.image_url.replace('local://', '');
+                            const fileData = await Filesystem.readFile({
+                                path: fileName,
+                                directory: Directory.Data
+                            });
+
+                            const blob = new Blob([Uint8Array.from(atob(fileData.data as string), c => c.charCodeAt(0))], { type: 'image/webp' });
+                            const serverFileName = `${userId}/${Date.now()}-synced.webp`;
+
+                            const { error: uploadError } = await supabase.storage
+                                .from('journal-media-private')
+                                .upload(serverFileName, blob);
+
+                            if (!uploadError) {
+                                finalImagePath = serverFileName;
+                                await Filesystem.deleteFile({ path: fileName, directory: Directory.Data });
+                            }
+                        } catch (e) {
+                            console.error("Local image sync failed:", e);
+                        }
+                    }
+
+                    // Sync Audio
+                    if (entry.audio_url?.startsWith('local://')) {
+                        try {
+                            const fileName = entry.audio_url.replace('local://', '');
+                            const fileData = await Filesystem.readFile({
+                                path: fileName,
+                                directory: Directory.Data
+                            });
+
+                            const ext = fileName.split('.').pop() || 'webm';
+                            const blob = new Blob([Uint8Array.from(atob(fileData.data as string), c => c.charCodeAt(0))], { type: `audio/${ext}` });
+                            const serverFileName = `${userId}/audio-${Date.now()}-synced.${ext}`;
+
+                            const { error: uploadError } = await supabase.storage
+                                .from('journal-media-private')
+                                .upload(serverFileName, blob);
+
+                            if (!uploadError) {
+                                finalAudioPath = serverFileName;
+                                await Filesystem.deleteFile({ path: fileName, directory: Directory.Data });
+                            }
+                        } catch (e) {
+                            console.error("Local audio sync failed:", e);
+                        }
+                    }
+                }
+
                 // CONFLICT RESOLUTION: Check server timestamp first
                 const { data: serverEntry } = await supabase
                     .from('entries')
@@ -476,8 +534,8 @@ export function JournalEditor({
                         user_id: userId,
                         date: dateKey,
                         content: entry.content,
-                        image_url: entry.image_url || null,
-                        audio_url: entry.audio_url || null,
+                        image_url: finalImagePath || null,
+                        audio_url: finalAudioPath || null,
                         updated_at: new Date().toISOString()
                     }, { onConflict: 'user_id, date' });
 
@@ -698,6 +756,25 @@ export function JournalEditor({
                 return;
             }
 
+            // OFFLINE PREVIEW: Load from local filesystem
+            if (imagePath.startsWith('local://')) {
+                try {
+                    const fileName = imagePath.replace('local://', '');
+                    const fileData = await Filesystem.readFile({
+                        path: fileName,
+                        directory: Directory.Data
+                    });
+                    const url = `data:image/webp;base64,${fileData.data}`;
+                    if (isMountedRef.current && !cancelled) {
+                        setDisplayUrl(url);
+                        setImageLoadError(false);
+                    }
+                    return;
+                } catch (e) {
+                    console.error("Local preview failed:", e);
+                }
+            }
+
             const url = await getEternalSignedUrl(imagePath);
 
             if (isMountedRef.current && !cancelled) {
@@ -744,6 +821,25 @@ export function JournalEditor({
             if (!audioPath) {
                 if (isMountedRef.current && !cancelled) setAudioDisplayUrl(null);
                 return;
+            }
+
+            // OFFLINE PREVIEW: Load from local filesystem
+            if (audioPath.startsWith('local://')) {
+                try {
+                    const fileName = audioPath.replace('local://', '');
+                    const fileData = await Filesystem.readFile({
+                        path: fileName,
+                        directory: Directory.Data
+                    });
+                    const ext = fileName.split('.').pop() || 'webm';
+                    const url = `data:audio/${ext};base64,${fileData.data}`;
+                    if (isMountedRef.current && !cancelled) {
+                        setAudioDisplayUrl(url);
+                    }
+                    return;
+                } catch (e) {
+                    console.error("Local audio preview failed:", e);
+                }
             }
 
             const url = await getEternalSignedUrl(audioPath);
@@ -1002,9 +1098,47 @@ export function JournalEditor({
     const processFile = useCallback(async (file: File) => {
         if (!userId) return;
 
-        // FIX: Offline check - media uploads require network
+        // OFFLINE PERSISTENCE: Save to local filesystem if offline
+        if (!navigator.onLine && nativeMedia.isNative()) {
+            try {
+                const objectUrl = URL.createObjectURL(file);
+                setDisplayUrl(objectUrl);
+                setIsUploading(true);
+
+                // Convert file to base64
+                const reader = new FileReader();
+                const base64Promise = new Promise<string>((resolve, reject) => {
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+
+                const base64Data = await base64Promise;
+                const fileName = `offline-image-${Date.now()}.webp`;
+
+                await Filesystem.writeFile({
+                    path: fileName,
+                    data: base64Data.split(',')[1],
+                    directory: Directory.Data
+                });
+
+                const localPath = `local://${fileName}`;
+                if (isMountedRef.current) {
+                    setImagePath(localPath);
+                    showToast("Saved locally (offline mode)", "success");
+                }
+                return;
+            } catch (error) {
+                console.error("Offline image save failed:", error);
+                showToast("Could not save image offline.", "error");
+                return;
+            } finally {
+                setIsUploading(false);
+            }
+        }
+
         if (!navigator.onLine) {
-            showToast("Cannot upload media while offline. Please reconnect to upload images.", "warning");
+            showToast("Cannot upload media while offline. Please reconnect.", "warning");
             return;
         }
 
@@ -1143,13 +1277,21 @@ export function JournalEditor({
 
             if (dbError) throw dbError;
 
-            // Now delete from storage
-            const { error: storageError } = await supabase.storage
-                .from('journal-media-private')
-                .remove([previousPath]);
+            if (previousPath.startsWith('local://')) {
+                const fileName = previousPath.replace('local://', '');
+                await Filesystem.deleteFile({
+                    path: fileName,
+                    directory: Directory.Data
+                });
+            } else {
+                // Now delete from storage
+                const { error: storageError } = await supabase.storage
+                    .from('journal-media-private')
+                    .remove([previousPath]);
 
-            if (storageError) {
-                console.warn("Storage deletion failed (orphaned file):", storageError);
+                if (storageError) {
+                    console.warn("Storage deletion failed (orphaned file):", storageError);
+                }
             }
 
             // Clean local cache properly
@@ -1174,7 +1316,39 @@ export function JournalEditor({
 
     // --- Shared Upload Handlers ---
     const handleVoiceNote = async (audioBlob: Blob) => {
-        // FIX: Offline check - media uploads require network
+        // OFFLINE PERSISTENCE: Save to local filesystem if offline
+        if (!navigator.onLine && nativeMedia.isNative()) {
+            try {
+                const reader = new FileReader();
+                const base64Promise = new Promise<string>((resolve, reject) => {
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(audioBlob);
+                });
+
+                const base64Data = await base64Promise;
+                const ext = audioBlob.type.includes('mp4') ? 'mp4' : 'webm';
+                const fileName = `offline-audio-${Date.now()}.${ext}`;
+
+                await Filesystem.writeFile({
+                    path: fileName,
+                    data: base64Data.split(',')[1],
+                    directory: Directory.Data
+                });
+
+                const localPath = `local://${fileName}`;
+                if (isMountedRef.current) {
+                    setAudioPath(localPath);
+                    showToast("Voice note saved locally (offline)", "success");
+                }
+                return;
+            } catch (error) {
+                console.error("Offline audio save failed:", error);
+                showToast("Could not save voice note offline.", "error");
+                return;
+            }
+        }
+
         if (!navigator.onLine) {
             showToast("Cannot upload voice note while offline. Please reconnect.", "warning");
             return;
@@ -1448,12 +1622,20 @@ export function JournalEditor({
 
             if (dbError) throw dbError;
 
-            const { error: storageError } = await supabase.storage
-                .from('journal-media-private')
-                .remove([previousPath]);
+            if (previousPath.startsWith('local://')) {
+                const fileName = previousPath.replace('local://', '');
+                await Filesystem.deleteFile({
+                    path: fileName,
+                    directory: Directory.Data
+                });
+            } else {
+                const { error: storageError } = await supabase.storage
+                    .from('journal-media-private')
+                    .remove([previousPath]);
 
-            if (storageError) {
-                console.warn("Storage deletion failed (orphaned file):", storageError);
+                if (storageError) {
+                    console.warn("Storage deletion failed (orphaned file):", storageError);
+                }
             }
 
             // Update cache

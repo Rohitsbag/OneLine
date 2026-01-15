@@ -2,8 +2,8 @@
     "version": "1.0.18",
     "versionCode": 18,
     "downloadUrl": "https://get-one-line.vercel.app/oneline.apk",
-    "sha256": "c2a0835a5977b386630bc9587f6a9795cddb8955235b10134612a1930dc23b68",
-    "releaseNotes": "Production-grade PIN lock system with secure OTP reset and hardened security.",
+    "sha256": "017248569df9616a41a190b6da5da3869f662413c0bf0b7b0fa93394b9082097",
+    "releaseNotes": "Properly Native Update: Optimized offline-first experience with robust native media persistence and fixed authentication issues.",
     "minimumVersion": "1.0.16",
     "forceUpdate": false,
     "killSwitch": false
