@@ -387,27 +387,28 @@ export function JournalEditor({
                 recognition.lang = sttLanguage === "Auto" ? "en-US" : (sttLanguage === "Hindi" ? "hi-IN" : "en-US");
 
                 recognition.onresult = (event: SpeechRecognitionEvent) => {
-                    let finalTranscript = '';
+                    let fullTranscript = '';
                     // @ts-ignore
-                    for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    for (let i = 0; i < event.results.length; ++i) {
                         // @ts-ignore
-                        if (event.results[i].isFinal) {
-                            // @ts-ignore
-                            finalTranscript += event.results[i][0].transcript;
-                        }
+                        fullTranscript += event.results[i][0].transcript;
                     }
-                    if (finalTranscript) {
-                        webSpeechResultRef.current += (webSpeechResultRef.current ? ' ' : '') + finalTranscript;
+                    if (fullTranscript) {
+                        webSpeechResultRef.current = fullTranscript;
                     }
                 };
 
                 // @ts-ignore
                 recognition.onerror = (event) => {
                     if (event.error === 'network' || event.error === 'aborted' || event.error === 'no-speech') {
+                        if (event.error === 'no-speech' && isRecording) {
+                            showToast("No speech detected.", "warning");
+                        }
                         return;
                     }
-                    console.warn("Web Speech API Error:", event);
+                    console.warn("Web Speech API Error:", event.error, event);
                     isWebSpeechActiveRef.current = false;
+                    showToast(`Speech Error: ${event.error}`, "error");
                 };
 
                 recognition.onend = () => {
@@ -1803,8 +1804,7 @@ export function JournalEditor({
                 }
 
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
+                    // NOTE: Removed manual getUserMedia to avoid conflicts on mobile
                     if (recognitionRef.current) {
                         try {
                             recognitionRef.current.start();
@@ -1813,7 +1813,6 @@ export function JournalEditor({
                             if (e.name !== 'InvalidStateError') {
                                 console.warn("Failed to start Web Speech API", e);
                                 showToast("Could not start speech recognition.", "error");
-                                stream.getTracks().forEach(t => t.stop());
                                 return;
                             } else {
                                 isWebSpeechActiveRef.current = true;
@@ -1827,20 +1826,17 @@ export function JournalEditor({
                         setRecordingDuration(prev => prev + 1);
                     }, 1000);
 
-                    (mediaRecorderRef as any).currentStream = stream;
-
                 } catch (error: any) {
                     console.error("Error starting STT:", error);
                     if (error.name === 'NotAllowedError') {
                         showToast("Microphone access denied.", "error");
                     } else {
                         showToast("Could not access microphone.", "error");
-
                     }
                 }
             }
         }
-    }, [isRecording, sttLanguage, showToast]);
+    }, [isRecording, sttLanguage, showToast, isMountedRef, setContent, startAudioRecording, NativeSpeechRecognition, recognitionRef]);
 
     const triggerHaptic = useCallback((pattern: number | number[] = 10) => {
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
