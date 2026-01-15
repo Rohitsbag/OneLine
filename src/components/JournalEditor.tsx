@@ -253,6 +253,7 @@ export function JournalEditor({
     const audioChunksRef = useRef<Blob[]>([]);
     const recognitionRef = useRef<SpeechRecognition | null>(null);
     const webSpeechResultRef = useRef<string>(""); // Store Web Speech API result
+    const sttFinalBaseRef = useRef<string>(""); // Store final confirmed transcription chunks
     const isWebSpeechActiveRef = useRef<boolean>(false);
     const contentRef = useRef(content);
     const imagePathRef = useRef(imagePath);
@@ -387,14 +388,29 @@ export function JournalEditor({
                 recognition.lang = sttLanguage === "Auto" ? "en-US" : (sttLanguage === "Hindi" ? "hi-IN" : "en-US");
 
                 recognition.onresult = (event: SpeechRecognitionEvent) => {
-                    let fullTranscript = '';
+                    let finalTranscript = '';
+                    let interimTranscript = '';
+
                     // @ts-ignore
-                    for (let i = 0; i < event.results.length; ++i) {
+                    for (let i = event.resultIndex; i < event.results.length; ++i) {
                         // @ts-ignore
-                        fullTranscript += event.results[i][0].transcript;
+                        const transcript = event.results[i][0].transcript;
+                        // @ts-ignore
+                        if (event.results[i].isFinal) {
+                            finalTranscript += transcript;
+                        } else {
+                            interimTranscript += transcript;
+                        }
                     }
-                    if (fullTranscript) {
-                        webSpeechResultRef.current = fullTranscript;
+
+                    if (finalTranscript) {
+                        sttFinalBaseRef.current += (sttFinalBaseRef.current ? " " : "") + finalTranscript.trim();
+                    }
+
+                    // Combine final base with current interim guess
+                    const combined = (sttFinalBaseRef.current + " " + interimTranscript).trim();
+                    if (combined) {
+                        webSpeechResultRef.current = combined;
                     }
                 };
 
@@ -1743,6 +1759,7 @@ export function JournalEditor({
         } else {
             // --- START RECORDING ---
             webSpeechResultRef.current = "";
+            sttFinalBaseRef.current = "";
 
             if (isAndroid) {
                 // START NATIVE ANDROID STT (Works Offline!)
@@ -1762,9 +1779,29 @@ export function JournalEditor({
                     // Set up listener for partial results
                     nativeListenerRef.current = await NativeSpeechRecognition.addListener('partialResults', (data: { matches: string[] }) => {
                         if (data.matches && data.matches.length > 0) {
+                            // Store partial as potential result
                             webSpeechResultRef.current = data.matches[0];
                         }
                     });
+
+                    // Add a final result listener for maximum accuracy
+                    const finalListener = await NativeSpeechRecognition.addListener('results', (data: { matches: string[] }) => {
+                        if (data.matches && data.matches.length > 0) {
+                            // Overwrite with the final confirmed text
+                            webSpeechResultRef.current = data.matches[0];
+                        }
+                    });
+
+                    // Store both to remove later
+                    const originalRemove = nativeListenerRef.current.remove;
+                    nativeListenerRef.current.remove = async () => {
+                        try {
+                            if (originalRemove) await originalRemove();
+                            if (finalListener) await finalListener.remove();
+                        } catch (e) {
+                            console.warn("Error removing native listeners:", e);
+                        }
+                    };
 
                     // Determine language
                     let lang = 'en-US';
