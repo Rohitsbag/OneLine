@@ -19,6 +19,7 @@
     "@capacitor/filesystem": "^8.0.0",
     "@capacitor/local-notifications": "^6.0.0",
     "@capacitor/network": "^6.0.0",
+    "@capgo/capacitor-speech-recognition": "^8.0.4",
     "@radix-ui/react-popover": "^1.1.15",
     "@radix-ui/react-scroll-area": "^1.2.10",
     "@radix-ui/react-separator": "^1.1.8",

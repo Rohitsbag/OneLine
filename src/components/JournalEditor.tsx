@@ -10,6 +10,9 @@ import { useToast } from "./Toast";
 import { JOURNAL_CONFIG } from "@/constants/journal";
 import * as nativeMedia from "@/utils/native-media";
 import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Capacitor } from '@capacitor/core';
+import { SpeechRecognition as NativeSpeechRecognition } from '@capgo/capacitor-speech-recognition';
+
 
 // Fix Types for SpeechRecognition
 interface SpeechRecognitionEvent extends Event {
@@ -1657,97 +1660,183 @@ export function JournalEditor({
         }
     };
 
-    // --- STT Logic (Web Speech API Only - No Whisper) ---
+    // --- STT Logic (Native on Android, Web Speech API on Browser) ---
     const [isTranscribing, setIsTranscribing] = useState(false);
+    const nativeListenerRef = useRef<any>(null);
 
     const toggleRecording = useCallback(async () => {
+        const isAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+
         if (isRecording) {
-            // --- STOP RECORDING (Web Speech API Only) ---
-            if (recognitionRef.current && isWebSpeechActiveRef.current) {
-                try {
-                    recognitionRef.current.stop();
-                } catch (e) {
-                    console.warn("Recognition stop error:", e);
-                }
-                isWebSpeechActiveRef.current = false;
-            }
-
-            // Cleanup mic stream
-            if ((mediaRecorderRef as any).currentStream) {
-                const stream = (mediaRecorderRef as any).currentStream;
-                stream.getTracks().forEach((track: any) => track.stop());
-                (mediaRecorderRef as any).currentStream = null;
-            }
-
+            // --- STOP RECORDING ---
             setIsRecording(false);
             if (recordingTimerRef.current) {
                 clearInterval(recordingTimerRef.current);
                 recordingTimerRef.current = null;
             }
 
-            // Final transcription handling
-            setIsTranscribing(true);
-            setTimeout(() => {
-                if (isMountedRef.current) {
-                    const text = webSpeechResultRef.current;
-                    if (text && text.trim().length > 0) {
-                        setContent(prev => {
-                            const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                            return prev + (needsSpace ? ' ' : '') + text.trim();
-                        });
-                        showToast("Transcribed", "success");
-                    } else {
-                        showToast("No speech detected.", "warning");
+            if (isAndroid) {
+                // STOP NATIVE ANDROID STT
+                try {
+                    await NativeSpeechRecognition.stop();
+                    if (nativeListenerRef.current) {
+                        await nativeListenerRef.current.remove();
+                        nativeListenerRef.current = null;
                     }
-                    setIsTranscribing(false);
+                } catch (e) {
+                    console.warn("Native STT stop error:", e);
                 }
-            }, 500);
-        } else {
-            // --- START RECORDING (Web Speech API Only) ---
 
-            // ROBUSTNESS: Ensure we have a clean state before starting
+                // Get final result
+                setIsTranscribing(true);
+                setTimeout(() => {
+                    if (isMountedRef.current) {
+                        const text = webSpeechResultRef.current;
+                        if (text && text.trim().length > 0) {
+                            setContent(prev => {
+                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                return prev + (needsSpace ? ' ' : '') + text.trim();
+                            });
+                            showToast("Transcribed", "success");
+                        } else {
+                            showToast("No speech detected.", "warning");
+                        }
+                        setIsTranscribing(false);
+                    }
+                }, 300);
+            } else {
+                // STOP WEB SPEECH API
+                if (recognitionRef.current && isWebSpeechActiveRef.current) {
+                    try {
+                        recognitionRef.current.stop();
+                    } catch (e) {
+                        console.warn("Recognition stop error:", e);
+                    }
+                    isWebSpeechActiveRef.current = false;
+                }
+
+                // Cleanup mic stream
+                if ((mediaRecorderRef as any).currentStream) {
+                    const stream = (mediaRecorderRef as any).currentStream;
+                    stream.getTracks().forEach((track: any) => track.stop());
+                    (mediaRecorderRef as any).currentStream = null;
+                }
+
+                setIsTranscribing(true);
+                setTimeout(() => {
+                    if (isMountedRef.current) {
+                        const text = webSpeechResultRef.current;
+                        if (text && text.trim().length > 0) {
+                            setContent(prev => {
+                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                                return prev + (needsSpace ? ' ' : '') + text.trim();
+                            });
+                            showToast("Transcribed", "success");
+                        } else {
+                            showToast("No speech detected.", "warning");
+                        }
+                        setIsTranscribing(false);
+                    }
+                }, 500);
+            }
+        } else {
+            // --- START RECORDING ---
             webSpeechResultRef.current = "";
 
-            // Check for Web Speech API support
-            if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
-                showToast("Speech recognition not supported on this device.", "error");
-                return;
-            }
-
-            try {
-                // Request mic permission first (required for WebView on Android)
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-                if (recognitionRef.current) {
-                    try {
-                        recognitionRef.current.start();
-                        isWebSpeechActiveRef.current = true;
-                    } catch (e: any) {
-                        if (e.name !== 'InvalidStateError') {
-                            console.warn("Failed to start Web Speech API", e);
-                            showToast("Could not start speech recognition.", "error");
-                            stream.getTracks().forEach(t => t.stop());
-                            return;
-                        } else {
-                            isWebSpeechActiveRef.current = true;
-                        }
+            if (isAndroid) {
+                // START NATIVE ANDROID STT (Works Offline!)
+                try {
+                    const permResult = await NativeSpeechRecognition.requestPermissions();
+                    if (permResult.speechRecognition !== 'granted') {
+                        showToast("Microphone permission denied.", "error");
+                        return;
                     }
+
+                    const available = await NativeSpeechRecognition.available();
+                    if (!available.available) {
+                        showToast("Speech recognition not available.", "error");
+                        return;
+                    }
+
+                    // Set up listener for partial results
+                    nativeListenerRef.current = await NativeSpeechRecognition.addListener('partialResults', (data: { matches: string[] }) => {
+                        if (data.matches && data.matches.length > 0) {
+                            webSpeechResultRef.current = data.matches[0];
+                        }
+                    });
+
+                    // Determine language
+                    let lang = 'en-US';
+                    if (sttLanguage === 'Hindi') lang = 'hi-IN';
+                    else if (sttLanguage === 'Hinglish') lang = 'hi-IN'; // Use Hindi, closest match
+
+                    await NativeSpeechRecognition.start({
+                        language: lang,
+                        partialResults: true,
+                        popup: false, // Use inline recognition, no popup
+                    });
+
+                    setIsRecording(true);
+                    setRecordingDuration(0);
+                    recordingTimerRef.current = setInterval(() => {
+                        if (isMountedRef.current) {
+                            setRecordingDuration(prev => {
+                                if (prev >= JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS) {
+                                    toggleRecording();
+                                    showToast("Recording limit reached.", "info");
+                                    return JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS;
+                                }
+                                return prev + 1;
+                            });
+                        }
+                    }, 1000);
+
+                } catch (error: any) {
+                    console.error("Native STT error:", error);
+                    showToast("Could not start speech recognition.", "error");
+                }
+            } else {
+                // START WEB SPEECH API (Browser)
+                if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
+                    showToast("Speech recognition not supported.", "error");
+                    return;
                 }
 
-                setIsRecording(true);
-                setRecordingDuration(0);
-                recordingTimerRef.current = setInterval(() => {
-                    setRecordingDuration(prev => prev + 1);
-                }, 1000);
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-                (mediaRecorderRef as any).currentStream = stream;
+                    if (recognitionRef.current) {
+                        try {
+                            recognitionRef.current.start();
+                            isWebSpeechActiveRef.current = true;
+                        } catch (e: any) {
+                            if (e.name !== 'InvalidStateError') {
+                                console.warn("Failed to start Web Speech API", e);
+                                showToast("Could not start speech recognition.", "error");
+                                stream.getTracks().forEach(t => t.stop());
+                                return;
+                            } else {
+                                isWebSpeechActiveRef.current = true;
+                            }
+                        }
+                    }
 
-            } catch (error: any) {
-                console.error("Error starting STT:", error);
-                if (error.name === 'NotAllowedError') {
-                    showToast("Microphone access denied.", "error");
-                } else {
-                    showToast("Could not access microphone.", "error");
+                    setIsRecording(true);
+                    setRecordingDuration(0);
+                    recordingTimerRef.current = setInterval(() => {
+                        setRecordingDuration(prev => prev + 1);
+                    }, 1000);
+
+                    (mediaRecorderRef as any).currentStream = stream;
+
+                } catch (error: any) {
+                    console.error("Error starting STT:", error);
+                    if (error.name === 'NotAllowedError') {
+                        showToast("Microphone access denied.", "error");
+                    } else {
+                        showToast("Could not access microphone.", "error");
+
+                    }
                 }
             }
         }
