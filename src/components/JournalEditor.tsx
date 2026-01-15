@@ -1497,7 +1497,6 @@ export function JournalEditor({
                 }
 
                 if (result) {
-                    // Using Browser Speech result captured in background
                     setIsTranscribing(true);
                     try {
                         const text = webSpeechResultRef.current;
@@ -1522,7 +1521,11 @@ export function JournalEditor({
 
             // --- WEB STOP RECORDING (Browser Speech API Only) ---
             if (recognitionRef.current && isWebSpeechActiveRef.current) {
-                recognitionRef.current.stop();
+                try {
+                    recognitionRef.current.stop();
+                } catch (e) {
+                    console.warn("Recognition stop error:", e);
+                }
                 isWebSpeechActiveRef.current = false;
             }
 
@@ -1555,19 +1558,21 @@ export function JournalEditor({
                     }
                     setIsTranscribing(false);
                 }
-            }, 500); // Small delay to catch final results
+            }, 500);
         } else {
             // --- START RECORDING ---
-            try {
-                if (nativeMedia.isNative()) {
+
+            // ROBUSTNESS: Ensure we have a clean state before starting
+            webSpeechResultRef.current = "";
+
+            if (nativeMedia.isNative()) {
+                try {
                     // Start Native Recorder
                     await nativeMedia.nativeVoice.start();
 
                     // Start Backup (Web Speech)
-                    // We wrap in try/catch to ensure native recording continues even if backup fails (e.g. mic busy)
                     if (recognitionRef.current) {
                         try {
-                            webSpeechResultRef.current = "";
                             recognitionRef.current.start();
                             isWebSpeechActiveRef.current = true;
                         } catch (e) {
@@ -1576,7 +1581,6 @@ export function JournalEditor({
                     }
 
                     setIsRecording(true);
-                    // Start Timer...
                     setRecordingDuration(0);
                     recordingTimerRef.current = setInterval(() => {
                         if (isMountedRef.current) {
@@ -1591,58 +1595,54 @@ export function JournalEditor({
                         }
                     }, 1000);
                     return;
+                } catch (error: any) {
+                    console.error("Error starting native audio:", error);
+                    showToast("Could not start recording.", "error");
+                    return;
                 }
-            } catch (error: any) {
-                console.error("Error starting native audio:", error);
-                showToast("Could not start recording.", "error");
+            }
+
+            // --- WEB START RECORDING (Browser Speech API Only) ---
+            if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
+                showToast("Speech recognition not supported in this browser.", "error");
                 return;
             }
-        }
 
-        // --- WEB START RECORDING (Browser Speech API Only) ---
-        if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
-            showToast("Speech recognition not supported in this browser.", "error");
-            return;
-        }
+            try {
+                // Check for mic permission first
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-        try {
-            // Check for mic permission first to give better error feedback
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-            // Start Web Speech API
-            webSpeechResultRef.current = ""; // Reset buffer
-            if (recognitionRef.current) {
-                try {
-                    recognitionRef.current.start();
-                    isWebSpeechActiveRef.current = true;
-                } catch (e: any) {
-                    if (e.name !== 'InvalidStateError') {
-                        console.warn("Failed to start Web Speech API", e);
-                        showToast("Could not start speech recognition.", "error");
-                        stream.getTracks().forEach(t => t.stop());
-                        return;
-                    } else {
+                if (recognitionRef.current) {
+                    try {
+                        recognitionRef.current.start();
                         isWebSpeechActiveRef.current = true;
+                    } catch (e: any) {
+                        if (e.name !== 'InvalidStateError') {
+                            console.warn("Failed to start Web Speech API", e);
+                            showToast("Could not start speech recognition.", "error");
+                            stream.getTracks().forEach(t => t.stop());
+                            return;
+                        } else {
+                            isWebSpeechActiveRef.current = true;
+                        }
                     }
                 }
-            }
 
-            setIsRecording(true);
-            setRecordingDuration(0);
-            recordingTimerRef.current = setInterval(() => {
-                setRecordingDuration(prev => prev + 1);
-            }, 1000);
+                setIsRecording(true);
+                setRecordingDuration(0);
+                recordingTimerRef.current = setInterval(() => {
+                    setRecordingDuration(prev => prev + 1);
+                }, 1000);
 
-            // Keep stream active to keep mic indicator visible, but we don't need it for recording
-            // We'll stop it when recording stops
-            (mediaRecorderRef as any).currentStream = stream;
+                (mediaRecorderRef as any).currentStream = stream;
 
-        } catch (error: any) {
-            console.error("Error starting STT:", error);
-            if (error.name === 'NotAllowedError') {
-                showToast("Microphone access denied.", "error");
-            } else {
-                showToast("Could not access microphone.", "error");
+            } catch (error: any) {
+                console.error("Error starting STT:", error);
+                if (error.name === 'NotAllowedError') {
+                    showToast("Microphone access denied.", "error");
+                } else {
+                    showToast("Could not access microphone.", "error");
+                }
             }
         }
     }, [isRecording, sttLanguage, showToast]);
@@ -1672,7 +1672,6 @@ export function JournalEditor({
         if (nativeMedia.isNative()) {
             const result = await nativeMedia.getPhoto('CAMERA');
             if (result) {
-                // Pass to existing file handler logic but with blob
                 processFile(new File([result.blob], "photo.jpg", { type: result.blob.type }));
             }
             return;
@@ -1688,7 +1687,6 @@ export function JournalEditor({
         if (nativeMedia.isNative()) {
             const result = await nativeMedia.getPhoto('CAMERA');
             if (result) {
-                // Use existing OCR handler (Tesseract.js or AI-based)
                 await handleOCRUploadManual(result.blob);
             }
             return;
@@ -1697,7 +1695,6 @@ export function JournalEditor({
         ocrFileInputRef.current?.click();
     };
 
-    // Memoized Handlers for Menu Buttons
     const handleMicButtonClick = useCallback(() => {
         if (isGuest && onGuestAction) {
             onGuestAction();
@@ -1726,14 +1723,11 @@ export function JournalEditor({
         triggerHaptic(5);
     }, [isGuest, onGuestAction, triggerHaptic]);
 
-    // --- OCR Processing (HYBRID: Online + Offline Fallback) ---
-    // --- OCR Processing (HYBRID: Online + Offline Fallback) ---
     const handleOCRUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
         const file = e.target.files[0];
-        e.target.value = ""; // Reset input
+        e.target.value = "";
 
-        // Cancel any in-progress OCR
         if (ocrAbortControllerRef.current) {
             ocrAbortControllerRef.current.abort();
         }
@@ -1742,15 +1736,11 @@ export function JournalEditor({
 
         if (!userId) return;
 
-        // Capture initial state for race condition check
-
-        // Validation
         if (!(await validateImageFile(file))) {
-            showToast("Invalid image file. Please use a valid image.", "error");
+            showToast("Invalid image file.", "error");
             return;
         }
 
-        // Hard Limit check on input
         if (file.size > JOURNAL_CONFIG.MAX_RAW_IMAGE_SIZE_MB * 1024 * 1024) {
             showToast(`Image too large (Max ${JOURNAL_CONFIG.MAX_RAW_IMAGE_SIZE_MB}MB).`, "error");
             return;
@@ -1760,23 +1750,14 @@ export function JournalEditor({
 
         try {
             if (signal.aborted) return;
-
-            // Optimize for OCR
-            const compressedBlob = await compressImage(
-                file,
-                JOURNAL_CONFIG.OCR_IMAGE_MAX_SIZE, // 1024px
-                1024 // Target 1MB
-            );
-
+            const compressedBlob = await compressImage(file, JOURNAL_CONFIG.OCR_IMAGE_MAX_SIZE, 1024);
             if (signal.aborted) return;
             await handleOCRUploadManual(compressedBlob);
         } catch (error: any) {
-            if (error.name === 'AbortError' || signal.aborted) {
-                console.log("OCR aborted");
-                return;
+            if (error.name !== 'AbortError') {
+                console.error("OCR Error:", error);
+                showToast("Could not read text from image.", "error");
             }
-            console.error("OCR Error:", error);
-            showToast(error.message || "Could not read text from image.", "error");
         } finally {
             if (isMountedRef.current) {
                 setIsProcessingOCR(false);
@@ -1784,7 +1765,6 @@ export function JournalEditor({
         }
     };
 
-    // --- Drag & Drop ---
     const onDragOver = useCallback((e: React.DragEvent) => {
         e.preventDefault();
         setIsDragging(true);
@@ -1811,7 +1791,6 @@ export function JournalEditor({
     const isToday = isSameDay(currentDate, new Date());
     const isMinDate = minDate && isSameDay(currentDate, minDate);
 
-    // --- Swipe Navigation ---
     const touchStartX = useRef<number | null>(null);
     const touchStartY = useRef<number | null>(null);
     const SWIPE_THRESHOLD = 80;
@@ -1823,32 +1802,24 @@ export function JournalEditor({
 
     const handleTouchEndSwipe = (e: React.TouchEvent) => {
         if (touchStartX.current === null || touchStartY.current === null) return;
-
         const deltaX = e.changedTouches[0].clientX - touchStartX.current;
         const deltaY = e.changedTouches[0].clientY - touchStartY.current;
-
-        // Ensure it's mostly horizontal
         if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > SWIPE_THRESHOLD) {
             if (deltaX > 0) {
-                // Swipe Right -> Prev Date
                 if (!isMinDate) navigateDate('prev');
             } else {
-                // Swipe Left -> Next Date
                 if (!isToday) navigateDate('next');
             }
         }
-
         touchStartX.current = null;
         touchStartY.current = null;
     };
 
-    // Dynamic accent color logic
     const accentObj = ACCENT_COLORS.find(c => c.bgClass === accentColor) || ACCENT_COLORS[0];
     const hoverClass = (accentObj as any).hoverTextClass || "group-hover:text-white";
 
     return (
         <div className="flex flex-col flex-1 max-w-2xl w-full mx-auto mt-12 mb-8 items-center">
-
             {/* Header / Date Nav */}
             <div className="flex items-center gap-6 mb-12">
                 <button
@@ -1865,7 +1836,6 @@ export function JournalEditor({
                     <h2 className="text-2xl font-light text-[#18181b] dark:text-white select-none">
                         {isToday ? "Today" : format(currentDate, "MMMM d, yyyy")}
                     </h2>
-                    {/* Sync Status Indicator - Subtle */}
                     <div className="text-[9px] text-zinc-400 dark:text-zinc-600 font-medium tracking-wide uppercase flex items-center gap-1">
                         {syncStatus === 'synced' && <span title="Synced to cloud">✓ Synced</span>}
                         {syncStatus === 'local' && <span title="Saved locally">○ Saved</span>}
@@ -1885,7 +1855,7 @@ export function JournalEditor({
                 </button>
             </div>
 
-            {/* Offline Banner - Non-blocking, subtle */}
+            {/* Offline Banner */}
             {isOffline && (
                 <div className="w-full mb-4 px-4 py-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30 rounded-xl flex items-center justify-center gap-2 text-xs text-amber-800 dark:text-amber-400 font-medium">
                     <span>📡</span>
@@ -1917,7 +1887,6 @@ export function JournalEditor({
                         adjustTextareaHeight();
                     }}
                     onBlur={() => {
-                        // IMMEDIATE FLUSH ON BLUR
                         const dateStr = format(currentDate, 'yyyy-MM-dd');
                         if (isDirtyRef.current && userId && contentDateRef.current === dateStr) {
                             saveEntry(dateStr, content, imagePath, audioPath);
@@ -1982,7 +1951,7 @@ export function JournalEditor({
                                 <X className="w-8 h-8" />
                                 <span className="text-sm">Image failed to load</span>
                                 <button
-                                    onClick={refreshImageUrl} // Targeted refresh - only reloads image URL
+                                    onClick={refreshImageUrl}
                                     className="text-xs text-blue-500 hover:underline"
                                 >
                                     Retry
@@ -1994,18 +1963,11 @@ export function JournalEditor({
                                 alt={`Journal entry for ${format(currentDate, 'MMMM d, yyyy')}`}
                                 className="w-full h-auto max-h-[500px] object-contain transition-transform duration-700 hover:scale-[1.02]"
                                 onError={() => {
-                                    // FIX: Use sync handler to avoid stale state, limit to 1 retry
-                                    // imageRetryAttemptedRef prevents infinite loop
-                                    // FIX: Capture path to prevent race condition on navigation
                                     const capturedPath = imagePath;
                                     if (capturedPath && !imageLoadError && !imageRetryAttemptedRef.current) {
                                         imageRetryAttemptedRef.current = true;
-                                        try {
-                                            safeStorage.removeItem(`signed_url_journal-media-private_${capturedPath}`);
-                                        } catch { }
-                                        // Call async function separately
+                                        try { safeStorage.removeItem(`signed_url_journal-media-private_${capturedPath}`); } catch { }
                                         getEternalSignedUrl(capturedPath).then(newUrl => {
-                                            // FIX: Only update if path hasn't changed during async operation
                                             if (newUrl && isMountedRef.current && imagePathRef.current === capturedPath) {
                                                 setDisplayUrl(newUrl);
                                             } else if (isMountedRef.current && imagePathRef.current === capturedPath) {
@@ -2058,7 +2020,6 @@ export function JournalEditor({
 
             {/* Action Bar */}
             <div className="flex w-full justify-center gap-8 mt-4 select-none">
-
                 {/* Voice Group */}
                 <div className="relative" ref={micMenuRef}>
                     <button
@@ -2088,7 +2049,6 @@ export function JournalEditor({
                         )}
                     </button>
 
-                    {/* Mic Menu Bubble */}
                     {showMicMenu && (
                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl flex flex-col gap-1 min-w-[160px] animate-in slide-in-from-bottom-2 fade-in duration-200 z-50">
                             <button
@@ -2143,7 +2103,6 @@ export function JournalEditor({
                         )}
                     </button>
 
-                    {/* Camera Menu Bubble */}
                     {showCameraMenu && (
                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl flex flex-col gap-1 min-w-[160px] animate-in slide-in-from-bottom-2 fade-in duration-200 z-50">
                             <button
