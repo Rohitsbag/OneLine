@@ -1497,37 +1497,22 @@ export function JournalEditor({
                 }
 
                 if (result) {
-                    // GUARD: Check if recording is too short for Whisper (min 0.01s, using 1s for safety)
-                    if (recordingDuration < 1 || !result.blob || result.blob.size < 1000) {
-                        console.warn("Recording too short, skipping transcription");
-                        showToast("Recording too short.", "warning");
-                        return;
-                    }
-
+                    // Using Browser Speech result captured in background
                     setIsTranscribing(true);
                     try {
-                        const { transcribeAudio } = await import("@/utils/ai");
-                        const text = await transcribeAudio(result.blob, 'whisper-large-v3-turbo', sttLanguage);
-                        if (text && isMountedRef.current) {
+                        const text = webSpeechResultRef.current;
+                        if (text && text.trim().length > 0 && isMountedRef.current) {
                             setContent(prev => {
                                 const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                return prev + (needsSpace ? ' ' : '') + text;
+                                return prev + (needsSpace ? ' ' : '') + text.trim();
                             });
+                            showToast("Transcribed (Native Speech)", "success");
+                        } else {
+                            showToast("No speech detected.", "warning");
                         }
                     } catch (err) {
-                        console.error("Native transcription failed:", err);
-
-                        // FALLBACK: Use Web Speech API Result
-                        if (webSpeechResultRef.current && webSpeechResultRef.current.trim().length > 0) {
-                            console.log("Using Offline Fallback (Native)...");
-                            showToast("Network failed. Used offline backup.", "warning");
-                            setContent(prev => {
-                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                return prev + (needsSpace ? ' ' : '') + webSpeechResultRef.current;
-                            });
-                        } else {
-                            showToast("Transcription failed. No offline backup available.", "error");
-                        }
+                        console.error("Transcription processing failed:", err);
+                        showToast("Transcription failed.", "error");
                     } finally {
                         setIsTranscribing(false);
                     }
@@ -1535,18 +1520,17 @@ export function JournalEditor({
                 return;
             }
 
-            // --- STOP WEB RECORDING (Dual Strategy) ---
-
-            // 1. Stop Audio Recorder (for Whisper)
-            if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-                mediaRecorderRef.current.requestData(); // Flush last chunk
-                mediaRecorderRef.current.stop();
-            }
-
-            // 2. Stop Web Speech API (Background)
+            // --- WEB STOP RECORDING (Browser Speech API Only) ---
             if (recognitionRef.current && isWebSpeechActiveRef.current) {
                 recognitionRef.current.stop();
                 isWebSpeechActiveRef.current = false;
+            }
+
+            // Cleanup mic stream
+            if ((mediaRecorderRef as any).currentStream) {
+                const stream = (mediaRecorderRef as any).currentStream;
+                stream.getTracks().forEach((track: any) => track.stop());
+                (mediaRecorderRef as any).currentStream = null;
             }
 
             setIsRecording(false);
@@ -1555,9 +1539,23 @@ export function JournalEditor({
                 recordingTimerRef.current = null;
             }
 
-            // 3. Transcription happens in the 'onstop' handler of MediaRecorder.
-            // The onstop handler sets isTranscribing state appropriately.
-            // We don't do anything else here - the flow continues in onstop.
+            // Final transcription handling
+            setIsTranscribing(true);
+            setTimeout(() => {
+                if (isMountedRef.current) {
+                    const text = webSpeechResultRef.current;
+                    if (text && text.trim().length > 0) {
+                        setContent(prev => {
+                            const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                            return prev + (needsSpace ? ' ' : '') + text.trim();
+                        });
+                        showToast("Transcribed", "success");
+                    } else {
+                        showToast("No speech detected.", "warning");
+                    }
+                    setIsTranscribing(false);
+                }
+            }, 500); // Small delay to catch final results
         } else {
             // --- START RECORDING ---
             try {
@@ -1601,123 +1599,29 @@ export function JournalEditor({
             }
         }
 
-        // --- START WEB RECORDING (Dual Strategy) ---
-
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            showToast("Microphone not supported in this browser.", "error");
+        // --- WEB START RECORDING (Browser Speech API Only) ---
+        if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
+            showToast("Speech recognition not supported in this browser.", "error");
             return;
         }
 
         try {
+            // Check for mic permission first to give better error feedback
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            // 1. Start Audio Recorder (Whisper)
-            let mimeType = 'audio/webm';
-            if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm')) {
-                mimeType = 'audio/webm';
-            } else if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/mp4')) {
-                mimeType = 'audio/mp4'; // Safari
-            }
-
-            const mediaRecorder = new MediaRecorder(stream, { mimeType });
-            mediaRecorderRef.current = mediaRecorder;
-            audioChunksRef.current = [];
-
-            mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) audioChunksRef.current.push(event.data);
-            };
-
-            mediaRecorder.onstop = async () => {
-                // This runs when we call .stop() in the STOP block above
-                const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-
-                // GUARD: Check if audio is too short for Whisper
-                if (recordingDuration < 1 || audioBlob.size < 1000) {
-                    console.warn("Web recording too short, skipping transcription");
-                    if (isMountedRef.current) {
-                        showToast("Recording too short.", "warning");
-                        setIsTranscribing(false);
-                    }
-                    stream.getTracks().forEach(track => track.stop()); // Cleanup mic immediately
-                    return;
-                }
-
-                // CRITICAL: Set transcribing state at START of transcription
-                if (isMountedRef.current) setIsTranscribing(true);
-
-                // FIX: Declare outside try so it's accessible in nested catch blocks
-                let transcribeAudio: ((blob: Blob, model: string, lang?: string) => Promise<string>) | null = null;
-
-                try {
-                    // FIX: Move import INSIDE try block so finally runs if import fails
-                    const aiModule = await import("@/utils/ai");
-                    transcribeAudio = aiModule.transcribeAudio;
-
-                    // ATTEMPT 1: Whisper Large v3 (Cloud)
-                    console.log("Dual STT: Trying Whisper Large...");
-                    const text = await transcribeAudio(audioBlob, 'whisper-large-v3', sttLanguage);
-                    if (text && isMountedRef.current) {
-                        setContent(prev => {
-                            const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                            return prev + (needsSpace ? ' ' : '') + text;
-                        });
-                        showToast("Transcribed with Whisper (High Quality)", "success");
-                        return; // Success!
-                    }
-                } catch (err: any) {
-                    console.warn("Whisper Large failed:", err);
-
-                    // ATTEMPT 2: Whisper Turbo (Cloud - Faster/Fallback)
-                    try {
-                        // If import failed above, transcribeAudio is null - go straight to offline fallback
-                        if (!transcribeAudio) throw new Error("Import failed, skip to offline");
-
-                        console.log("Dual STT: Trying Whisper Turbo...");
-                        const text = await transcribeAudio(audioBlob, 'whisper-large-v3-turbo', sttLanguage);
-                        if (text && isMountedRef.current) {
-                            setContent(prev => {
-                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                return prev + (needsSpace ? ' ' : '') + text;
-                            });
-                            showToast("Transcribed with Whisper Turbo", "success");
-                            return; // Success!
-                        }
-                    } catch (turboErr: any) {
-                        console.warn("Whisper Turbo failed:", turboErr);
-
-                        // ATTEMPT 3: Web Speech API (Local / Background Result)
-                        // We use the result we captured in background 'webSpeechResultRef'
-                        console.log("Dual STT: Using Browser Fallback...");
-                        if (webSpeechResultRef.current && isMountedRef.current) {
-                            const backupText = webSpeechResultRef.current;
-                            setContent(prev => {
-                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                return prev + (needsSpace ? ' ' : '') + backupText;
-                            });
-                            showToast("Offline Fallback Used (Browser Speech)", "warning");
-                        } else {
-                            showToast("Transcription failed. Please try again.", "error");
-                        }
-                    }
-                } finally {
-                    if (isMountedRef.current) setIsTranscribing(false);
-                    stream.getTracks().forEach(track => track.stop()); // Cleanup mic
-                }
-            };
-
-            mediaRecorder.start();
-
-            // 2. Start Web Speech API (Background)
+            // Start Web Speech API
             webSpeechResultRef.current = ""; // Reset buffer
-            if (recognitionRef.current && !isWebSpeechActiveRef.current) {
+            if (recognitionRef.current) {
                 try {
                     recognitionRef.current.start();
                     isWebSpeechActiveRef.current = true;
                 } catch (e: any) {
                     if (e.name !== 'InvalidStateError') {
                         console.warn("Failed to start Web Speech API", e);
+                        showToast("Could not start speech recognition.", "error");
+                        stream.getTracks().forEach(t => t.stop());
+                        return;
                     } else {
-                        // If it says "already started", we just mark it as active and continue
                         isWebSpeechActiveRef.current = true;
                     }
                 }
@@ -1729,9 +1633,17 @@ export function JournalEditor({
                 setRecordingDuration(prev => prev + 1);
             }, 1000);
 
+            // Keep stream active to keep mic indicator visible, but we don't need it for recording
+            // We'll stop it when recording stops
+            (mediaRecorderRef as any).currentStream = stream;
+
         } catch (error: any) {
             console.error("Error starting STT:", error);
-            showToast("Could not access microphone.", "error");
+            if (error.name === 'NotAllowedError') {
+                showToast("Microphone access denied.", "error");
+            } else {
+                showToast("Could not access microphone.", "error");
+            }
         }
     }, [isRecording, sttLanguage, showToast]);
 

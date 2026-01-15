@@ -9,6 +9,6 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
         flowType: 'pkce', // Implicit flow is deprecated/flaky on mobile
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: false, // Prevents errors on mobile deep links
+        detectSessionInUrl: true, // REQUIRED for PKCE and Email Confirmation links
     }
 });
