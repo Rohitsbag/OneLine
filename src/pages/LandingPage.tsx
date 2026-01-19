@@ -131,6 +131,10 @@ const Navbar = () => {
                                 <span className="absolute -bottom-1 left-0 w-0 h-px bg-white transition-all duration-300 group-hover:w-full"></span>
                             </a>
                         ))}
+                        <a href="/docs" className="text-sm font-medium text-zinc-400 hover:text-white transition-colors relative group">
+                            API Docs
+                            <span className="absolute -bottom-1 left-0 w-0 h-px bg-white transition-all duration-300 group-hover:w-full"></span>
+                        </a>
                     </div>
 
                     <div className="hidden md:flex items-center gap-4">
@@ -154,6 +158,7 @@ const Navbar = () => {
                             {item}
                         </a>
                     ))}
+                    <a href="/docs" onClick={() => setIsMenuOpen(false)} className="text-lg font-medium text-zinc-300 hover:text-white">API Docs</a>
                     <Link to="/auth" className="btn-primary text-center py-3 bg-white text-black rounded-xl font-bold">Start Writing</Link>
                 </div>
             )}
@@ -522,6 +527,7 @@ const Footer = ({ downloadUrl }: { downloadUrl: string }) => {
                         <ul className="space-y-3 text-sm text-zinc-500">
                             <li><Link to="/" className="hover:text-white transition-colors">Manifesto</Link></li>
                             <li><Link to="/" className="hover:text-white transition-colors">Roadmap</Link></li>
+                            <li><a href="/docs" className="hover:text-white transition-colors">API Docs</a></li>
                             <li><Link to="/auth" className="hover:text-white transition-colors">Sign In</Link></li>
                         </ul>
                     </div>

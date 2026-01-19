@@ -1,5 +1,5 @@
 {
-    "$schema": "https://mintlify.com/schema.json",
+    "$schema": "https://mintlify.com/docs.json",
     "name": "OneLine API",
     "theme": "mint",
     "logo": {
@@ -12,35 +12,78 @@
         "light": "#818cf8",
         "dark": "#4f46e5"
     },
-    "topbarCtaButton": {
-        "name": "Open App",
-        "url": "https://get-one-line.vercel.app"
-    },
-    "navigation": [
-        {
-            "group": "Get Started",
-            "pages": [
-                "introduction",
-                "authentication"
-            ]
-        },
-        {
-            "group": "API Reference",
-            "pages": [
-                "api-reference/overview",
-                "api-reference/entries",
-                "api-reference/search"
-            ]
-        },
-        {
-            "group": "MCP Server",
-            "pages": [
-                "mcp/overview",
-                "mcp/tools"
-            ]
+    "navbar": {
+        "primary": {
+            "type": "button",
+            "label": "Open App",
+            "href": "https://get-one-line.vercel.app"
         }
-    ],
-    "footerSocials": {
-        "github": "https://github.com/Rohitsbag/OneLine"
+    },
+    "navigation": {
+        "groups": [
+            {
+                "group": "Get Started",
+                "pages": [
+                    "introduction",
+                    "authentication",
+                    "changelog"
+                ]
+            },
+            {
+                "group": "API Reference",
+                "pages": [
+                    "api-reference/overview",
+                    "api-reference/entries",
+                    "api-reference/search"
+                ]
+            },
+            {
+                "group": "MCP Server",
+                "pages": [
+                    "mcp/overview",
+                    "mcp/tools"
+                ]
+            }
+        ]
+    },
+    "api": {
+        "mdx": {
+            "auth": {
+                "method": "bearer"
+            },
+            "server": "https://ytnovnqeugzmcazavbvz.supabase.co/functions/v1/api-gateway"
+        },
+        "playground": {
+            "display": "interactive"
+        },
+        "examples": {
+            "languages": [
+                "curl",
+                "python",
+                "javascript"
+            ],
+            "defaults": "required",
+            "prefill": true
+        }
+    },
+    "contextual": {
+        "options": [
+            "copy",
+            "view",
+            "chatgpt",
+            "claude",
+            "perplexity",
+            "mcp",
+            "cursor",
+            "vscode"
+        ]
+    },
+    "seo": {
+        "indexing": "all"
+    },
+    "footer": {
+        "socials": {
+            "github": "https://github.com/Rohitsbag/OneLine"
+        }
     }
 }
