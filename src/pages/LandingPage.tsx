@@ -185,7 +185,7 @@ const Hero = ({ downloadUrl }: { downloadUrl: string }) => {
                 <FadeIn delay={100}>
                     <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-xs font-medium text-zinc-400 mb-8 mx-auto hover:bg-zinc-800 transition-colors cursor-default">
                         <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                        Version 1.0 is now live
+                        Version 1.5 is now live
                     </div>
                 </FadeIn>
 

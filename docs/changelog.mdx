@@ -1,16 +1,53 @@
 ---
 title: "Changelog"
-description: "Product updates and announcements for OneLine"
+description: "Latest updates and product announcements for OneLine"
 rss: true
 ---
 
-<Update label="January 2026" description="v1.0.0">
-  ### Initial Release
+<Update label="January 19, 2026" description="v1.1.0 - AI & Developer Ecosystem">
+  ### Core Philosophy
+  - **One Line Concept**: A minimalist personal diary experience focused on capturing a single daily summary or happy moment.
 
-  We are excited to announce the first production release of OneLine API and documentation.
+  ### Developer Features
+  - **Full API Access**: Edge Functions for CRUD operations (GET, POST, PUT, DELETE) with built-in rate limiting for secure developer integrations.
+  - **MCP Server Support**: OneLine is now a Model Context Protocol (MCP) server, allowing direct connection to AI agents and LLMs with allow-listed write tools.
 
-  - **Interactive Playground**: Test API endpoints directly from the documentation.
-  - **AI Contextual Menu**: Optimized for LLMs with "Copy Page" and "Open in ChatGPT/Claude" features.
-  - **MCP Server Support**: Seamlessly integrate OneLine with your AI agents via Model Context Protocol.
-  - **Premium UI**: A minimalist, dark-themed documentation experience.
+  ### Media & Content
+  - **Expanded Media Uploads**: Up to 10 items per entry (5 photos/videos + 5 voice notes).
+  - **High-Fidelity Audio**: Upgraded to `whisper-large-v3-turbo` for superior online STT accuracy.
+  - **Media Guardrails**: 3–5 minute duration limits per note and new custom display settings (cards/swipe/scroll).
+
+  ### Intelligence & Search
+  - **Timeline Search**: Integrated search bar in the timeline panel with word-matching (embeddings search coming soon).
+  - **AI Rewrite**: Added a toggle-able feature to polish or rewrite journal entries using AI.
+  - **Hybrid OCR/STT**: Robust online/offline performance for capturing text and voice.
+
+  ### Reliability
+  - **Offline-First Android**: Full functionality without internet, utilizing aggressive local caching.
+  - **Background Syncing**: Persistent background sync ensures local data reaches the database as soon as connectivity returns.
+  - **Smart Notifications**: ML-powered reminders that trigger 5 minutes before your predicted sleep time based on usage patterns.
+</Update>
+
+<Update label="January 15, 2026" description="v1.0.5 - Security & UX Polish">
+  ### Security
+  - **Privacy Lock**: Added biometric (fingerprint/FaceID) and password protection for your journal.
+
+  ### User Experience
+  - **Timeline View**: A new way to browse your history visually.
+  - **Smart Navigation**: Swipe left/right to change entry dates seamlessly.
+  - **Undo/Redo**: Implemented "Smart Undo/Redo" for the editor.
+  - **Feedback Improvements**: Added a clear delete button for photo uploads and increased the auto-save time delay.
+
+  ### Bug Fixes
+  - **Persistence**: Fixed a critical "refresh bug" where images would occasionally disappear.
+  - **AI Services**: Resolved an issue preventing AI Summaries from generating.
+  - **Accuracy**: Improved STT and OCR model precision.
+</Update>
+
+<Update label="January 1, 2026" description="v1.0.0 - Genesis">
+  ### Welcome to OneLine
+  The initial launch of the minimalist journal designed to turn writing into a habit.
+  - Capture life in 30 seconds.
+  - Basic photo and audio support.
+  - Encrypted cloud sync.
 </Update>
