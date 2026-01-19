@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { format, subDays } from "date-fns";
 import { Header } from "@/components/Header";
 import { JournalEditor } from "@/components/JournalEditor";
 import { TimelineView } from "@/components/TimelineView";
@@ -120,6 +121,19 @@ export function JournalPage({
             }
 
             if (cachedUser) {
+                // STEP 1: Load from cache first for instant UI
+                const cachedSettingsRaw = localStorage.getItem(`settings_cache_${cachedUser.id}`);
+                if (cachedSettingsRaw) {
+                    const cached = JSON.parse(cachedSettingsRaw);
+                    if (cached.ai_enabled !== undefined) setAiEnabled(cached.ai_enabled);
+                    if (cached.ai_rewrite_enabled !== undefined) setAiRewriteEnabled(cached.ai_rewrite_enabled);
+                    if (cached.accent_color) setAccentColor(cached.accent_color);
+                    if (cached.stt_language) setSttLanguage(cached.stt_language);
+                    if (cached.notifications_enabled !== undefined) setNotificationsEnabled(cached.notifications_enabled);
+                    if (cached.notification_time) setNotificationTime(cached.notification_time);
+                    if (cached.media_display_mode) setMediaDisplayMode(cached.media_display_mode as any);
+                }
+
                 const { data: settings } = await supabase
                     .from('user_settings')
                     .select('*')
@@ -127,6 +141,8 @@ export function JournalPage({
                     .single();
 
                 if (settings) {
+                    // Update cache and state with fresh data
+                    localStorage.setItem(`settings_cache_${cachedUser.id}`, JSON.stringify(settings));
                     if (settings.ai_enabled !== undefined) setAiEnabled(settings.ai_enabled);
                     if (settings.ai_rewrite_enabled !== undefined) setAiRewriteEnabled(settings.ai_rewrite_enabled);
                     if (settings.accent_color) setAccentColor(settings.accent_color);
@@ -135,10 +151,38 @@ export function JournalPage({
                     if (settings.notification_time) setNotificationTime(settings.notification_time);
                     if (settings.media_display_mode) setMediaDisplayMode(settings.media_display_mode as any);
                 }
+
                 if (cachedUser.created_at) setMinDate(new Date(cachedUser.created_at));
+
+                // STEP 2: Trigger Deep Sync for offline history (last 30 days)
+                deepSyncEntries(cachedUser.id);
             }
             setIsLoadingAuth(false);
         };
+
+        const deepSyncEntries = async (uid: string) => {
+            if (!navigator.onLine) return;
+
+            try {
+                const dates = Array.from({ length: 30 }, (_, i) => format(subDays(new Date(), i), 'yyyy-MM-dd'));
+
+                const { data: entries } = await supabase
+                    .from('entries')
+                    .select('id, date, content, media_items, updated_at')
+                    .eq('user_id', uid)
+                    .in('date', dates);
+
+                if (entries) {
+                    entries.forEach(entry => {
+                        const cacheKey = `entry_cache_${uid}_${entry.date}`;
+                        localStorage.setItem(cacheKey, JSON.stringify(entry));
+                    });
+                }
+            } catch (e) {
+                console.error("Deep sync failed", e);
+            }
+        };
+
         initData();
     }, [navigate]);
 

@@ -41,7 +41,7 @@ async function callAIProxy(body: ChatRequest, signal?: AbortSignal): Promise<str
 // Maximum base64 size before compression (Edge Function accepts 4MB, we use 3.5MB for safety)
 const MAX_BASE64_SIZE = 3.5 * 1024 * 1024; // 3.5MB (leaves room for overhead)
 
-export async function performOCR(imageFile: File): Promise<string> {
+export async function performOCR(imageFile: File, language: string = "English"): Promise<string> {
     try {
         let fileToProcess = imageFile;
 
@@ -85,10 +85,10 @@ export async function performOCR(imageFile: File): Promise<string> {
             }
 
             // Proceed with emergency version
-            return await executeOCRCall(emergencyBase64);
+            return await executeOCRCall(emergencyBase64, language);
         }
 
-        return await executeOCRCall(base64Image);
+        return await executeOCRCall(base64Image, language);
 
     } catch (error: any) {
         console.error("OCR Error:", error);
@@ -100,7 +100,7 @@ export async function performOCR(imageFile: File): Promise<string> {
 }
 
 // Extracted inner logic for clean execution after compression handling
-async function executeOCRCall(base64Image: string): Promise<string> {
+async function executeOCRCall(base64Image: string, language: string = "English"): Promise<string> {
     // TIMEOUT: 45 seconds strict timeout for the entire operation
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 45000);
@@ -138,6 +138,37 @@ Output Rules:
         max_tokens: 1000
     }, controller.signal);
 
+    const runTesseract = async () => {
+        try {
+            const Tesseract = await import('tesseract.js');
+            const blob = await fetch(base64Image).then(r => r.blob());
+
+            // Map common names to Tesseract codes
+            const langMap: Record<string, string> = {
+                'English': 'eng',
+                'Hindi': 'hin',
+                'Spanish': 'spa',
+                'French': 'fra',
+                'German': 'deu',
+                'Chinese': 'chi_sim',
+                'Japanese': 'jpn'
+            };
+            const tesLang = langMap[language] || 'eng';
+
+            const { data: { text } } = await Tesseract.recognize(blob, tesLang, {
+                logger: () => { }
+            });
+            return text || "No text detected in image.";
+        } catch (e) {
+            console.error("Tesseract failed:", e);
+            return "OCR failed offline. Please try again online.";
+        }
+    };
+
+    if (!navigator.onLine) {
+        return await runTesseract();
+    }
+
     try {
         // TIER 1: Maverick (Primary)
         return await callOCRModel("meta-llama/llama-4-maverick-17b-128e-instruct");
@@ -150,25 +181,7 @@ Output Rules:
             return await callOCRModel("meta-llama/llama-4-scout-17b-16e-instruct");
         } catch (scoutError: any) {
             console.warn("Scout OCR failed, using Tesseract fallback...", scoutError);
-
-            // TIER 3: Tesseract.js (Client-side, never fails)
-            try {
-                // Dynamically import Tesseract to avoid bundle bloat
-                const Tesseract = await import('tesseract.js');
-
-                // Convert base64 to blob for Tesseract
-                const blob = await fetch(base64Image).then(r => r.blob());
-
-                const { data: { text } } = await Tesseract.recognize(blob, 'eng', {
-                    logger: () => { } // Suppress logs
-                });
-
-                return text || "No text detected in image.";
-            } catch (tesseractError) {
-                console.error("Tesseract fallback failed:", tesseractError);
-                // Absolute last resort
-                return "Unable to extract text from image. Please try a clearer image.";
-            }
+            return await runTesseract();
         }
     } finally {
         clearTimeout(timeoutId);

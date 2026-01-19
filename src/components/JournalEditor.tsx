@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Mic, Camera, X, Square, AudioLines, ScanText, Loader2, Trash2, Sparkles } from "lucide-react";
+import { ChevronLeft, ChevronRight, Mic, Camera, Video, X, Square, AudioLines, ScanText, Loader2, Trash2, Sparkles } from "lucide-react";
 import { format, addDays, subDays, isSameDay } from "date-fns";
 import { supabase } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
@@ -210,6 +210,7 @@ export function JournalEditor({
     const isUndoingRedoingRef = useRef(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const ocrFileInputRef = useRef<HTMLInputElement>(null);
+    const videoFileInputRef = useRef<HTMLInputElement>(null);
     const micMenuRef = useRef<HTMLDivElement>(null);
     const cameraMenuRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
@@ -352,8 +353,9 @@ export function JournalEditor({
                                     });
 
                                     // Determine mime type and extension
-                                    let mimeType = item.type === 'image' ? 'image/webp' : 'audio/webm';
-                                    const ext = fileName.split('.').pop() || (item.type === 'image' ? 'webp' : 'webm');
+                                    let mimeType = item.type === 'image' ? 'image/webp' :
+                                        item.type === 'video' ? 'video/mp4' : 'audio/webm';
+                                    const ext = fileName.split('.').pop() || (item.type === 'image' ? 'webp' : item.type === 'video' ? 'mp4' : 'webm');
                                     if (item.type === 'audio') mimeType = `audio/${ext}`; // Better audio mime handling
 
                                     const blob = new Blob([Uint8Array.from(atob(fileData.data as string), c => c.charCodeAt(0))], { type: mimeType });
@@ -1001,8 +1003,39 @@ export function JournalEditor({
             }
         }
 
+        if (!navigator.onLine && nativeMedia.isNative()) {
+            try {
+                // Offline Logic for Voice Note (Native)
+                const reader = new FileReader();
+                const base64Data = await new Promise<string>((resolve, reject) => {
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(audioBlob);
+                });
+
+                const ext = audioBlob.type.includes('mp4') ? 'mp4' : audioBlob.type.includes('ogg') ? 'ogg' : 'webm';
+                const fileName = `offline-audio-${Date.now()}.${ext}`;
+                await Filesystem.writeFile({
+                    path: fileName,
+                    data: base64Data.split(',')[1],
+                    directory: Directory.Data
+                });
+
+                const localPath = `local://${fileName}`;
+                if (isMountedRef.current) {
+                    addMedia({ type: 'audio', url: localPath, duration_seconds: finalDuration });
+                    showToast("Audio saved locally (offline)", "success");
+                }
+                return;
+            } catch (error) {
+                console.error("Offline audio save failed:", error);
+                showToast("Could not save audio offline.", "error");
+                return;
+            }
+        }
+
         if (!navigator.onLine) {
-            showToast("Offline: Cannot upload voice note.", "warning");
+            showToast("Offline: Please wait for internet to upload.", "warning");
             return;
         }
 
@@ -1336,6 +1369,90 @@ export function JournalEditor({
         }
 
         ocrFileInputRef.current?.click();
+    };
+
+    const handleVideoStart = async () => {
+        setShowCameraMenu(false);
+        if (nativeMedia.isNative()) {
+            const result = await nativeMedia.getVideo();
+            if (result) {
+                await processVideoFile(new File([result.blob], `video.${result.format}`, { type: `video/${result.format}` }));
+            }
+            return;
+        }
+        videoFileInputRef.current?.click();
+    };
+
+    const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files || e.target.files.length === 0) return;
+        const file = e.target.files[0];
+        e.target.value = "";
+        await processVideoFile(file);
+    };
+
+    const processVideoFile = async (file: File) => {
+        if (!userId) return;
+
+        // OFFLINE CHECK
+        if (!navigator.onLine && nativeMedia.isNative()) {
+            try {
+                setIsUploading(true);
+                const reader = new FileReader();
+                const base64Data = await new Promise<string>((resolve, reject) => {
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+
+                const fileName = `offline-video-${Date.now()}.mp4`;
+                await Filesystem.writeFile({
+                    path: fileName,
+                    data: base64Data.split(',')[1],
+                    directory: Directory.Data
+                });
+
+                const localPath = `local://${fileName}`;
+                if (isMountedRef.current) {
+                    addMedia({ type: 'video', url: localPath });
+                    showToast("Video saved locally (offline)", "success");
+                }
+                return;
+            } catch (error) {
+                console.error("Offline video save failed:", error);
+                showToast("Could not save video offline.", "error");
+                return;
+            } finally {
+                setIsUploading(false);
+            }
+        }
+
+        if (!navigator.onLine) {
+            showToast("Internet required for video upload.", "warning");
+            return;
+        }
+
+        setIsUploading(true);
+        try {
+            const uuid = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10);
+            const ext = file.name.split('.').pop() || 'mp4';
+            const fileName = `${userId}/video-${Date.now()}-${uuid}.${ext}`;
+
+            const { error } = await supabase.storage
+                .from('journal-media-private')
+                .upload(fileName, file);
+
+            if (error) throw error;
+
+            if (isMountedRef.current) {
+                addMedia({ type: 'video', url: fileName });
+                showToast("Video uploaded", "success");
+            }
+        } catch (error: any) {
+            console.error("Video upload error:", error);
+            showToast("Video upload failed.", "error");
+        } finally {
+            if (isMountedRef.current) setIsUploading(false);
+        }
     };
 
     const handleMicButtonClick = useCallback(() => {
@@ -1750,9 +1867,28 @@ export function JournalEditor({
                                     <div className="text-zinc-500 text-[10px]">Convert to text</div>
                                 </div>
                             </button>
+                            <button
+                                onClick={handleVideoStart}
+                                className="flex items-center gap-3 p-3 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-2xl transition-colors text-left"
+                            >
+                                <div className="w-8 h-8 rounded-xl bg-purple-50 dark:bg-purple-500/10 flex items-center justify-center">
+                                    <Video className="w-4 h-4 text-purple-500" />
+                                </div>
+                                <div>
+                                    <div className="text-zinc-900 dark:text-zinc-100 text-sm font-semibold">Video</div>
+                                    <div className="text-zinc-500 text-[10px]">Upload movie clip</div>
+                                </div>
+                            </button>
                         </div>
                     )}
                 </div>
+                <input
+                    type="file"
+                    ref={videoFileInputRef}
+                    onChange={handleVideoUpload}
+                    accept="video/*"
+                    className="hidden"
+                />
             </div>
 
             {/* Media Display */}

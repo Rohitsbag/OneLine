@@ -36,6 +36,42 @@ export async function getPhoto(source: 'CAMERA' | 'GALLERY'): Promise<{ blob: Bl
 }
 
 /**
+ * Pick a video using native UI
+ */
+export async function getVideo(): Promise<{ blob: Blob; url: string; format: string } | null> {
+    if (!isNative()) return null;
+
+    try {
+        const video = await Camera.getPhoto({
+            quality: 90,
+            allowEditing: false,
+            resultType: CameraResultType.Base64,
+            source: CameraSource.Photos,
+            // @ts-ignore - plugin support for video varies
+            promptLabelHeader: 'Pick a Video',
+            // @ts-ignore
+            types: ['video']
+        });
+
+        if (video.base64String) {
+            const rawData = atob(video.base64String);
+            const bytes = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; i++) {
+                bytes[i] = rawData.charCodeAt(i);
+            }
+            const format = video.format || 'mp4';
+            const blob = new Blob([bytes], { type: `video/${format}` });
+            const url = URL.createObjectURL(blob);
+            return { blob, url, format };
+        }
+        return null;
+    } catch (e) {
+        console.error('Native video capture failed:', e);
+        return null;
+    }
+}
+
+/**
  * Handle native voice recording
  */
 export const nativeVoice = {
