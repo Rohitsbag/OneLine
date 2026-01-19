@@ -11,6 +11,8 @@ import { TimePicker } from "./ui/time-picker";
 import { parse, format } from "date-fns";
 import { requestNotificationPermission, scheduleDailyReminder, cancelDailyReminder } from "@/utils/notifications";
 import { STT_LANGUAGES } from "@/constants/languages";
+import { ApiKeysSection } from "./ApiKeysSection";
+
 
 interface SettingsOverlayProps {
     isOpen: boolean;
@@ -481,6 +483,9 @@ export function SettingsOverlay({
                                 )}
                             </div>
                         </section>
+
+                        {/* API Keys Section */}
+                        <ApiKeysSection accentColor={accentColor} />
 
                         <section>
                             <div className="flex items-center justify-between px-1 mb-3">
