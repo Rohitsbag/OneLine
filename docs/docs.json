@@ -12,48 +12,35 @@
         "light": "#818cf8",
         "dark": "#4f46e5"
     },
-    "topbarLinks": [
-        {
-            "name": "Support",
-            "url": "mailto:support@oneline.app"
-        }
-    ],
     "topbarCtaButton": {
         "name": "Open App",
         "url": "https://get-one-line.vercel.app"
     },
-    "tabs": [
+    "navigation": [
         {
-            "name": "API Reference",
-            "url": "api-reference"
+            "group": "Get Started",
+            "pages": [
+                "introduction",
+                "authentication"
+            ]
+        },
+        {
+            "group": "API Reference",
+            "pages": [
+                "api-reference/overview",
+                "api-reference/entries",
+                "api-reference/search"
+            ]
+        },
+        {
+            "group": "MCP Server",
+            "pages": [
+                "mcp/overview",
+                "mcp/tools"
+            ]
         }
     ],
-    "anchors": [
-        {
-            "name": "GitHub",
-            "icon": "github",
-            "url": "https://github.com/Rohitsbag/OneLine"
-        }
-    ],
-    "navigation": {
-        "Get Started": [
-            "introduction",
-            "authentication"
-        ],
-        "API Reference": [
-            "api-reference/overview",
-            "api-reference/entries",
-            "api-reference/search"
-        ],
-        "MCP Server": [
-            "mcp/overview",
-            "mcp/tools"
-        ]
-    },
     "footerSocials": {
         "github": "https://github.com/Rohitsbag/OneLine"
-    },
-    "api": {
-        "baseUrl": "https://ytnovnqeugzmcazavbvz.supabase.co/functions/v1/api-gateway"
     }
 }
