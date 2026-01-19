@@ -1,10 +1,10 @@
 {
-    "version": "1.0.21",
-    "versionCode": 21,
+    "version": "1.5.0",
+    "versionCode": 25,
     "downloadUrl": "https://get-one-line.vercel.app/oneline.apk",
-    "sha256": "d3a02758390acda5b1da2c0c47e6f2def6ef32d063bf75d6a64f1b3315ce7610",
-    "releaseNotes": "STT Fix: Simplified transcription using Web Speech API for improved Android compatibility.",
-    "minimumVersion": "1.0.16",
-    "forceUpdate": false,
+    "sha256": "pending",
+    "releaseNotes": "v1.5: AI & Developer Ecosystem update. Full API access, MCP Server support, up to 10 media items per entry, and offline-first reliability.",
+    "minimumVersion": "1.0.0",
+    "forceUpdate": true,
     "killSwitch": false
 }
