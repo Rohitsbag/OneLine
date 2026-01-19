@@ -3,8 +3,8 @@
     "name": "OneLine API",
     "theme": "mint",
     "logo": {
-        "dark": "/logo.png",
-        "light": "/logo.png"
+        "dark": "/logo-dark.svg",
+        "light": "/logo-light.svg"
     },
     "favicon": "/favicon.svg",
     "colors": {
@@ -16,7 +16,7 @@
         "primary": {
             "type": "button",
             "label": "Open App",
-            "href": "https://get-one-line.vercel.app"
+            "href": "https://get-one-line.vercel.app/app"
         }
     },
     "navigation": {
