@@ -4,6 +4,7 @@
  */
 import { supabase } from "@/utils/supabase/client";
 import { startOfWeek, endOfWeek, format } from 'date-fns';
+import { STT_LANGUAGES } from "@/constants/languages";
 
 // Use full URL for Android APK compatibility (relative URLs don't work in Capacitor)
 const AI_PROXY_URL = `https://get-one-line.vercel.app/api/ai-proxy`;
@@ -198,9 +199,18 @@ export async function transcribeAudio(audioBlob: Blob, model: string, language: 
             systemPrompt = "Transcribe the audio into pure English. If the speaker is speaking Hindi, translate it to English.";
         }
 
+        // Map language to ISO code for Whisper
+        const langObj = STT_LANGUAGES.find(l => l.name === language || l.code === language);
+        const langCode = (langObj && langObj.code !== "auto" && langObj.code !== "hinglish") ? langObj.code : "";
+        // Hinglish/Auto don't send a specific language code to model but use prompt
+
         // TIMEOUT: 45 seconds strict timeout for transcription
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+        // Determine action: English selection uses 'translate' endpoint for best results
+        const isEnglish = language === "English";
+        const action = isEnglish ? "translate" : "transcribe";
 
         try {
             // Simple fetch to Vercel API route - no auth needed
@@ -210,10 +220,11 @@ export async function transcribeAudio(audioBlob: Blob, model: string, language: 
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify({
-                    action: "transcribe",
+                    action: action,
                     audio: base64Audio,
                     model: model,
-                    prompt: systemPrompt
+                    prompt: systemPrompt,
+                    language: isEnglish ? undefined : (langCode || undefined)
                 }),
                 signal: controller.signal
             });
@@ -276,37 +287,41 @@ export async function generateWeeklyReflection(userId: string): Promise<string> 
         - Use a calm, supportive tone.
         `;
 
-        // 15 second timeout for edge function
-        const timeoutPromise = new Promise<string>((_, reject) =>
-            setTimeout(() => reject(new Error("AI Request Timed Out")), 15000)
-        );
 
-        const fetchWithRetry = async (retryCount = 0): Promise<string> => {
-            try {
-                const aiPromise = callAIProxy({
+
+        const callAI = async (model: string, signal: AbortSignal) => {
+            const response = await fetch(AI_PROXY_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
                     action: "chat",
-                    model: "meta-llama/llama-4-maverick-17b-128e-instruct",
                     messages: [{ role: "user", content: prompt }],
+                    model: model,
                     temperature: 0.7,
                     max_tokens: 500,
-                });
-
-                const result = await Promise.race([aiPromise, timeoutPromise]);
-                if (!result || result.trim() === "") {
-                    throw new Error("Empty AI response");
-                }
-                return result;
-            } catch (err) {
-                if (retryCount < 1) {
-                    console.warn(`AI Summary failed, retrying... (${retryCount + 1})`, err);
-                    return fetchWithRetry(retryCount + 1);
-                }
-                throw err;
-            }
+                }),
+                signal
+            });
+            if (!response.ok) throw new Error(`Model ${model} failed`);
+            const data = await response.json();
+            return data.text;
         };
 
-        const result = await fetchWithRetry();
-        return result;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+        try {
+            try {
+                // TIER 1: Primary Summarization Model
+                return await callAI("openai/gpt-oss-20b", controller.signal);
+            } catch (error) {
+                console.warn("Weekly Reflection main model failed, trying fallback...", error);
+                // TIER 2: Fallback Model
+                return await callAI("llama-3.1-8b-instant", controller.signal);
+            }
+        } finally {
+            clearTimeout(timeoutId);
+        }
 
     } catch (error) {
         console.error('AI Error:', error);
@@ -363,4 +378,30 @@ export async function generateContextualSummary(contextText: string): Promise<st
     } finally {
         clearTimeout(timeoutId);
     }
+}
+
+export async function performRewrite(text: string): Promise<string> {
+    if (!text || text.trim().length === 0) return "";
+
+    const prompt = `
+    You are a professional editor for a personal journal.
+    Task: Refine and polish the provided journal entry.
+    Requirements:
+    - Improve grammar, flow, and clarity while maintaining the original meaning and emotional tone.
+    - Keep it concise (retaining the "OneLine" spirit).
+    - If it's already well-written, make only subtle improvements.
+    - Do not add new information or remove key details.
+    - Output ONLY the polished text. No meta-commentary, no quotes.
+
+    Original Entry:
+    "${text}"
+    `;
+
+    return await callAIProxy({
+        action: "chat",
+        model: "llama-3.1-8b-instant",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3,
+        max_tokens: 200,
+    });
 }

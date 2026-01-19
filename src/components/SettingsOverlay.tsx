@@ -1,4 +1,4 @@
-import { X, FileDown, LogOut, User as UserIcon, Info } from "lucide-react";
+import { X, FileDown, LogOut, User as UserIcon, Info, Search, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { supabase } from "@/utils/supabase/client";
@@ -10,12 +10,15 @@ import { useToast } from "./Toast";
 import { TimePicker } from "./ui/time-picker";
 import { parse, format } from "date-fns";
 import { requestNotificationPermission, scheduleDailyReminder, cancelDailyReminder } from "@/utils/notifications";
+import { STT_LANGUAGES } from "@/constants/languages";
 
 interface SettingsOverlayProps {
     isOpen: boolean;
     onClose: () => void;
     aiEnabled: boolean;
     onToggleAi: (enabled: boolean) => void;
+    aiRewriteEnabled?: boolean;
+    onToggleAiRewrite?: (enabled: boolean) => void;
     accentColor?: string;
     onAccentChange?: (color: string) => void;
     sttLanguage?: string;
@@ -27,26 +30,33 @@ interface SettingsOverlayProps {
     notificationTime?: string;
     onTimeChange?: (time: string) => void;
     pinCode?: string | null;
-    onPinChange?: (pin: string) => void;
+    onPinChange?: (pin: string | null) => void;
     isForcedSetup?: boolean;
+    mediaDisplayMode?: 'grid' | 'swipe' | 'scroll';
+    onMediaDisplayModeChange?: (mode: 'grid' | 'swipe' | 'scroll') => void;
 }
 
 export function SettingsOverlay({
     isOpen, onClose, aiEnabled: _aiEnabled, onToggleAi: _onToggleAi,
+    aiRewriteEnabled = false, onToggleAiRewrite,
     accentColor = "bg-indigo-500", onAccentChange,
     sttLanguage = "Auto", onLanguageChange,
     lockEnabled = false, onToggleLock,
     notificationsEnabled = false, onToggleNotifications,
     notificationTime = "20:00", onTimeChange,
     pinCode = null, onPinChange,
-    isForcedSetup = false
+    isForcedSetup = false,
+    mediaDisplayMode = 'grid', onMediaDisplayModeChange
 }: SettingsOverlayProps) {
     const [email, setEmail] = useState<string | null>(null);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [showLangDropdown, setShowLangDropdown] = useState(false);
     const [pinLength, setPinLength] = useState<4 | 6>(pinCode?.length === 6 ? 6 : 4);
     const [tempPin, setTempPin] = useState("");
     const [confirmPin, setConfirmPin] = useState("");
     const [setupStep, setSetupStep] = useState<"initial" | "confirm">("initial");
     const [isSaving, setIsSaving] = useState(false);
+    const [showPinSetup, setShowPinSetup] = useState(false); // Controls PIN setup UI visibility
 
     const navigate = useNavigate();
     const { showToast } = useToast();
@@ -182,6 +192,32 @@ export function SettingsOverlay({
                                     </p>
                                 </div>
                             </div>
+
+                            {/* AI Rewrite Feature */}
+                            <div className="p-4 rounded-[2rem] bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-100 dark:border-zinc-800/50 flex items-start gap-4 mt-3">
+                                <div className="p-2.5 bg-white dark:bg-zinc-800 rounded-2xl shadow-sm ring-1 ring-zinc-200 dark:ring-zinc-700">
+                                    <span className="text-lg">✍️</span>
+                                </div>
+                                <div className="flex-1 space-y-1 pt-0.5">
+                                    <div className="flex items-center justify-between">
+                                        <div className="text-sm font-bold text-zinc-900 dark:text-zinc-100">AI Rewrite</div>
+                                        <button
+                                            onClick={() => {
+                                                onToggleAiRewrite?.(!aiRewriteEnabled);
+                                            }}
+                                            className={cn(
+                                                "w-10 h-5 rounded-full relative transition-all duration-300 p-0.5",
+                                                aiRewriteEnabled ? accentColor : "bg-zinc-200 dark:bg-zinc-800"
+                                            )}
+                                        >
+                                            <div className={cn("w-4 h-4 rounded-full bg-white shadow-sm transition-all", aiRewriteEnabled ? "translate-x-5" : "translate-x-0")} />
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-zinc-500 leading-relaxed font-medium">
+                                        Polish and refine your entries with AI. Original text is always preserved.
+                                    </p>
+                                </div>
+                            </div>
                         </section>
 
                         {/* Appearance Section */}
@@ -202,6 +238,26 @@ export function SettingsOverlay({
                                                         accentColor === color.bgClass && "ring-2 ring-zinc-900 dark:ring-white ring-offset-2 dark:ring-offset-[#0a0a0a]"
                                                     )}
                                                 />
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center justify-between gap-4 mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-800/50">
+                                        <div className="text-sm font-bold text-zinc-900 dark:text-zinc-200">Media Layout</div>
+                                        <div className="flex gap-1 p-1 bg-white dark:bg-zinc-800 rounded-2xl shadow-sm ring-1 ring-zinc-200 dark:ring-zinc-700">
+                                            {(['grid', 'swipe', 'scroll'] as const).map((mode) => (
+                                                <button
+                                                    key={mode}
+                                                    onClick={() => onMediaDisplayModeChange?.(mode)}
+                                                    className={cn(
+                                                        "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all",
+                                                        mediaDisplayMode === mode
+                                                            ? cn(accentColor, "text-white shadow-md")
+                                                            : "text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                                                    )}
+                                                >
+                                                    {mode}
+                                                </button>
                                             ))}
                                         </div>
                                     </div>
@@ -274,7 +330,31 @@ export function SettingsOverlay({
                             <div className="flex items-center justify-between px-1 mb-3">
                                 <label className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">Privacy</label>
                                 <button
-                                    onClick={() => onToggleLock?.(!lockEnabled)}
+                                    onClick={async () => {
+                                        if (lockEnabled) {
+                                            // TURNING OFF: Clear lock and PIN data
+                                            const { data: { user } } = await supabase.auth.getUser();
+                                            if (user) {
+                                                // Clear local PIN data
+                                                localStorage.removeItem(`pin_hash_${user.id}`);
+                                                localStorage.removeItem(`device_salt_${user.id}`);
+                                                // Clear server state
+                                                await supabase.from('user_settings').upsert({
+                                                    user_id: user.id,
+                                                    pin_code: null,
+                                                    lock_enabled: false,
+                                                    updated_at: new Date().toISOString()
+                                                });
+                                                onPinChange?.(null);
+                                                onToggleLock?.(false);
+                                                showToast("PIN lock disabled", "success");
+                                            }
+                                        } else {
+                                            // TURNING ON: Only show PIN setup UI, don't enable lock yet
+                                            // The actual lock_enabled will be set to true ONLY after PIN is confirmed
+                                            setShowPinSetup(true);
+                                        }
+                                    }}
                                     className={cn(
                                         "w-10 h-5 rounded-full relative transition-all duration-300 p-0.5",
                                         lockEnabled ? accentColor : "bg-zinc-200 dark:bg-zinc-800"
@@ -287,10 +367,10 @@ export function SettingsOverlay({
                             <div className="p-4 rounded-[2rem] bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-100 dark:border-zinc-800/50 space-y-4">
                                 <div className="flex items-center justify-between">
                                     <div className="text-sm font-bold text-zinc-900 dark:text-zinc-200">Local PIN Lock</div>
-                                    <div className="text-[10px] text-zinc-400 font-bold uppercase">Private Access</div>
+                                    <div className="text-[10px] text-zinc-400 font-bold uppercase">{lockEnabled ? "Active" : "Disabled"}</div>
                                 </div>
 
-                                {lockEnabled && (
+                                {(lockEnabled || showPinSetup) && (
                                     <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800/50 space-y-4">
                                         <div className="flex gap-2 p-1 bg-white dark:bg-zinc-800 rounded-2xl shadow-sm ring-1 ring-zinc-200 dark:ring-zinc-700 w-fit">
                                             {[4, 6].map((len) => (
@@ -353,6 +433,8 @@ export function SettingsOverlay({
                                                                         localStorage.setItem(`pin_hash_${user.id}`, hash);
                                                                         localStorage.setItem(`device_salt_${user.id}`, salt);
                                                                         onPinChange?.("*".repeat(pinLength));
+                                                                        onToggleLock?.(true); // NOW enable lock after PIN is saved
+                                                                        setShowPinSetup(false); // Hide setup UI
                                                                         showToast("PIN secured successfully", "success");
                                                                         setSetupStep("initial");
                                                                         setTempPin("");
@@ -379,30 +461,101 @@ export function SettingsOverlay({
                                                     ? `Choose a ${pinLength}-digit PIN to lock your journal.`
                                                     : "Please re-enter your PIN to confirm."}
                                             </p>
+                                            {/* Cancel button - only show during new setup (not when editing existing) */}
+                                            {showPinSetup && !lockEnabled && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setShowPinSetup(false);
+                                                        setTempPin("");
+                                                        setConfirmPin("");
+                                                        setSetupStep("initial");
+                                                    }}
+                                                    className="w-full mt-2 py-2 text-xs font-bold text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
+                                                >
+                                                    Cancel
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
                                 )}
                             </div>
                         </section>
 
-                        {/* STT Section */}
                         <section>
-                            <label className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest px-1 block mb-3">Transcription</label>
-                            <div className="flex flex-wrap gap-2">
-                                {["Auto", "English", "Hindi", "Hinglish"].map((lang) => (
-                                    <button
-                                        key={lang}
-                                        onClick={() => onLanguageChange?.(lang)}
-                                        className={cn(
-                                            "px-4 py-2 rounded-2xl text-[11px] font-extrabold transition-all border",
-                                            sttLanguage === lang
-                                                ? cn(accentColor, "text-white border-transparent shadow-lg shadow-black/5")
-                                                : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400"
-                                        )}
-                                    >
-                                        {lang}
-                                    </button>
-                                ))}
+                            <div className="flex items-center justify-between px-1 mb-3">
+                                <label className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">Transcription</label>
+                            </div>
+
+                            <div className="relative group/lang">
+                                {/* Trigger Button */}
+                                <button
+                                    onClick={() => setShowLangDropdown(!showLangDropdown)}
+                                    className="w-full h-14 bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-100 dark:border-zinc-800/50 rounded-3xl px-6 flex items-center justify-between group hover:border-zinc-200 dark:hover:border-zinc-700 transition-all active:scale-[0.98]"
+                                >
+                                    <div className="flex flex-col items-start">
+                                        <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest leading-none mb-1">Language</div>
+                                        <div className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                                            {STT_LANGUAGES.find(l => l.name === sttLanguage || l.code === sttLanguage)?.name || sttLanguage}
+                                        </div>
+                                    </div>
+                                    <ChevronDown className={cn("w-5 h-5 text-zinc-400 transition-transform duration-300", showLangDropdown && "rotate-180")} />
+                                </button>
+
+                                {/* Searchable Dropdown */}
+                                {showLangDropdown && (
+                                    <div className="absolute bottom-full left-0 right-0 mb-3 bg-white dark:bg-[#0a0a0a] border border-zinc-200 dark:border-zinc-800 rounded-[2rem] shadow-2xl overflow-hidden animate-in slide-in-from-bottom-2 duration-300 z-50 ring-1 ring-black/5">
+                                        <div className="p-3 border-b border-zinc-100 dark:border-zinc-800/50 bg-zinc-50/50 dark:bg-zinc-900/20">
+                                            <div className="relative">
+                                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                                                <input
+                                                    autoFocus
+                                                    type="text"
+                                                    placeholder="Search language..."
+                                                    value={searchQuery}
+                                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                                    className="w-full bg-white dark:bg-zinc-800 border-none rounded-2xl pl-10 pr-4 py-2.5 text-sm font-medium focus:ring-0 outline-none text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="max-h-[250px] overflow-y-auto p-2 no-scrollbar">
+                                            {STT_LANGUAGES.filter(l =>
+                                                l.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                                                l.code.toLowerCase().includes(searchQuery.toLowerCase())
+                                            ).map((lang) => {
+                                                const isSelected = sttLanguage === lang.name || sttLanguage === lang.code;
+                                                return (
+                                                    <button
+                                                        key={lang.code}
+                                                        onClick={() => {
+                                                            onLanguageChange?.(lang.name); // Keep using name for consistency or switch to code? 
+                                                            // For now using name to avoid breaking JournalEditor logic
+                                                            setShowLangDropdown(false);
+                                                            setSearchQuery("");
+                                                        }}
+                                                        className={cn(
+                                                            "w-full flex items-center justify-between p-3 rounded-2xl transition-all mb-1",
+                                                            isSelected
+                                                                ? cn(accentColor, "text-white")
+                                                                : "hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
+                                                        )}
+                                                    >
+                                                        <span className="text-sm font-bold tracking-tight">{lang.name}</span>
+                                                        <span className="text-[10px] font-mono opacity-50 uppercase">{lang.code}</span>
+                                                    </button>
+                                                );
+                                            })}
+                                            {STT_LANGUAGES.filter(l =>
+                                                l.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                                                l.code.toLowerCase().includes(searchQuery.toLowerCase())
+                                            ).length === 0 && (
+                                                    <div className="p-8 text-center text-zinc-400 text-xs font-medium">
+                                                        No languages matched your search.
+                                                    </div>
+                                                )}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </section>
 

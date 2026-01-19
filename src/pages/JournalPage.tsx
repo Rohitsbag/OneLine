@@ -33,10 +33,12 @@ export function JournalPage({
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [userId, setUserId] = useState<string | null>(null);
     const [aiEnabled, setAiEnabled] = useState(false); // DEFAULT: OFF as requested
+    const [aiRewriteEnabled, setAiRewriteEnabled] = useState(false); // DEFAULT: OFF
     const [sttLanguage, setSttLanguage] = useState("Auto");
     const [notificationsEnabled, setNotificationsEnabled] = useState(false);
     const [notificationTime, setNotificationTime] = useState("20:00");
     const [accentColor, setAccentColor] = useState("bg-indigo-500");
+    const [mediaDisplayMode, setMediaDisplayMode] = useState<'grid' | 'swipe' | 'scroll'>('grid');
     const [refreshTrigger, setRefreshTrigger] = useState(0);
     const [pullProgress, setPullProgress] = useState(0);
     const [isPulling, setIsPulling] = useState(false);
@@ -126,10 +128,12 @@ export function JournalPage({
 
                 if (settings) {
                     if (settings.ai_enabled !== undefined) setAiEnabled(settings.ai_enabled);
+                    if (settings.ai_rewrite_enabled !== undefined) setAiRewriteEnabled(settings.ai_rewrite_enabled);
                     if (settings.accent_color) setAccentColor(settings.accent_color);
                     if (settings.stt_language) setSttLanguage(settings.stt_language);
                     if (settings.notifications_enabled !== undefined) setNotificationsEnabled(settings.notifications_enabled);
                     if (settings.notification_time) setNotificationTime(settings.notification_time);
+                    if (settings.media_display_mode) setMediaDisplayMode(settings.media_display_mode as any);
                 }
                 if (cachedUser.created_at) setMinDate(new Date(cachedUser.created_at));
             }
@@ -177,9 +181,19 @@ export function JournalPage({
         updateSetting('ai_enabled', enabled);
     };
 
+    const toggleAiRewrite = async (enabled: boolean) => {
+        setAiRewriteEnabled(enabled);
+        updateSetting('ai_rewrite_enabled', enabled);
+    };
+
     const updateAccentColor = (colorClass: string) => {
         setAccentColor(colorClass);
         updateSetting('accent_color', colorClass);
+    };
+
+    const updateMediaDisplayMode = (mode: 'grid' | 'swipe' | 'scroll') => {
+        setMediaDisplayMode(mode);
+        updateSetting('media_display_mode', mode);
     };
 
     const scheduleNotifications = async (enabled: boolean, timeStr?: string) => {
@@ -306,6 +320,8 @@ export function JournalPage({
                     onGuestAction={() => setShowAuthModal(true)}
                     refreshTrigger={refreshTrigger}
                     sttLanguage={sttLanguage}
+                    aiRewriteEnabled={aiRewriteEnabled}
+                    mediaDisplayMode={mediaDisplayMode}
                 />
 
                 {aiEnabled && (
@@ -327,6 +343,7 @@ export function JournalPage({
                 initialViewDate={calendarInitialDate}
                 onMonthChange={(date) => lastCalendarViewDate.current = date}
                 accentColor={accentColor}
+                userId={userId}
             />
 
             <SettingsOverlay
@@ -337,6 +354,8 @@ export function JournalPage({
                 }}
                 aiEnabled={aiEnabled}
                 onToggleAi={toggleAi}
+                aiRewriteEnabled={aiRewriteEnabled}
+                onToggleAiRewrite={toggleAiRewrite}
                 accentColor={accentColor}
                 onAccentChange={updateAccentColor}
                 sttLanguage={sttLanguage}
@@ -366,6 +385,8 @@ export function JournalPage({
                     onPinChange?.(val);
                 }}
                 isForcedSetup={initialPinSetupRequired}
+                mediaDisplayMode={mediaDisplayMode}
+                onMediaDisplayModeChange={updateMediaDisplayMode}
             />
 
             {userId && (

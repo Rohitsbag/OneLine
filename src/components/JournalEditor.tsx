@@ -1,58 +1,20 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Mic, Camera, X, Square, AudioLines, ScanText, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Mic, Camera, X, Square, AudioLines, ScanText, Loader2, Trash2, Sparkles } from "lucide-react";
 import { format, addDays, subDays, isSameDay } from "date-fns";
 import { supabase } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
 import { compressImage } from "@/utils/image";
+import { transcribeAudio } from "@/utils/ai";
 import { AudioPlayer } from "./AudioPlayer";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { useToast } from "./Toast";
 import { JOURNAL_CONFIG } from "@/constants/journal";
 import * as nativeMedia from "@/utils/native-media";
 import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Capacitor } from '@capacitor/core';
-import { SpeechRecognition as NativeSpeechRecognition } from '@capgo/capacitor-speech-recognition';
+import { MediaItem, MEDIA_LIMITS, canAddMedia } from "@/types/media";
 
 
-// Fix Types for SpeechRecognition
-interface SpeechRecognitionEvent extends Event {
-    readonly results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionResultList {
-    readonly length: number;
-    [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-    readonly isFinal: boolean;
-    [index: number]: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionAlternative {
-    readonly transcript: string;
-}
-
-interface SpeechRecognition extends EventTarget {
-    continuous: boolean;
-    interimResults: boolean;
-    lang: string;
-    start(): void;
-    stop(): void;
-    abort(): void;
-    onstart: ((this: SpeechRecognition, ev: Event) => void) | null;
-    onend: ((this: SpeechRecognition, ev: Event) => void) | null;
-    onerror: ((this: SpeechRecognition, ev: any) => void) | null;
-    onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void) | null;
-}
-
-declare global {
-    interface Window {
-        SpeechRecognition?: { new(): SpeechRecognition };
-        webkitSpeechRecognition?: { new(): SpeechRecognition };
-    }
-}
-
+// Fix Types for SpeechRecognition (REMOVED: Using Whisper Only)
 interface JournalEditorProps {
     date: Date;
     onDateChange: (date: Date) => void;
@@ -62,6 +24,8 @@ interface JournalEditorProps {
     onGuestAction?: () => void;
     refreshTrigger?: number;
     sttLanguage?: string;
+    aiRewriteEnabled?: boolean;
+    mediaDisplayMode?: 'grid' | 'swipe' | 'scroll';
 }
 
 // CRASH PREVENTION: Safe localStorage wrapper for Private Mode / disabled cookies
@@ -79,61 +43,63 @@ const safeStorage = {
 };
 
 // SECURITY: Magic Number Validation to prevent spoofed extensions
-const validateImageFile = async (file: File): Promise<boolean> => {
-    const supportedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif', 'image/bmp'];
+// Sub-component for rendering media items with signed URLs
+const MediaItemView = ({ item, accentColor }: { item: MediaItem, accentColor?: string }) => {
+    const [url, setUrl] = useState<string | null>(null);
+    const [error, setError] = useState(false);
+    const isMounted = useRef(true);
 
-    // First check MIME type
-    if (!supportedTypes.includes(file.type) && !file.type.startsWith('image/')) {
-        return false;
-    }
+    useEffect(() => {
+        isMounted.current = true;
+        const load = async () => {
+            // Handle raw files or data URLs instantly
+            if (item.url.startsWith('http') || item.url.startsWith('data:') || item.url.startsWith('blob:')) {
+                setUrl(item.url);
+                return;
+            }
+            if (item.url.startsWith('local://')) {
+                try {
+                    const fileName = item.url.replace('local://', '');
+                    const fileData = await Filesystem.readFile({
+                        path: fileName,
+                        directory: Directory.Data
+                    });
+                    // Determine mime type based on item type
+                    const mime = item.type === 'image' ? 'image/webp' : 'audio/webm';
+                    const src = `data:${mime};base64,${fileData.data}`;
+                    if (isMounted.current) setUrl(src);
+                } catch (e) {
+                    console.error("Local load failed", e);
+                    if (isMounted.current) setError(true);
+                }
+                return;
+            }
 
-    try {
-        const buffer = await file.slice(0, 16).arrayBuffer(); // Extended to 16 bytes
-        const bytes = new Uint8Array(buffer);
-
-        const signatures: Record<string, (bytes: Uint8Array) => boolean> = {
-            'image/jpeg': (b) => b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF,
-            'image/png': (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47,
-            'image/gif': (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38,
-            'image/bmp': (b) => b[0] === 0x42 && b[1] === 0x4D,
-            'image/webp': (b) => {
-                // RIFF header + WEBP identifier
-                return b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
-                    b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50;
-            },
-            'image/heic': (b) => {
-                // HEIC uses ftyp box at offset 4, then brand code at offset 8
-                // Valid brands: heic, heix, mif1, msf1
-                const isFtyp = b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70;
-                if (!isFtyp) return false;
-                // Check brand codes: heic(68 65 69 63), heix(68 65 69 78), mif1(6D 69 66 31)
-                const isHeic = b[8] === 0x68 && b[9] === 0x65 && b[10] === 0x69 && (b[11] === 0x63 || b[11] === 0x78);
-                const isMif1 = b[8] === 0x6D && b[9] === 0x69 && b[10] === 0x66 && b[11] === 0x31;
-                return isHeic || isMif1;
-            },
-            'image/heif': (b) => {
-                const isFtyp = b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70;
-                if (!isFtyp) return false;
-                const isHeic = b[8] === 0x68 && b[9] === 0x65 && b[10] === 0x69 && (b[11] === 0x63 || b[11] === 0x78);
-                const isMif1 = b[8] === 0x6D && b[9] === 0x69 && b[10] === 0x66 && b[11] === 0x31;
-                return isHeic || isMif1;
-            },
+            // Supabase Signed URL
+            const signed = await getEternalSignedUrl(item.url);
+            if (isMounted.current) {
+                if (signed) setUrl(signed);
+                else setError(true);
+            }
         };
+        load();
+        return () => { isMounted.current = false; };
+    }, [item.url, item.type]);
 
-        const validator = signatures[file.type];
-        if (validator) {
-            return validator(bytes);
-        }
+    if (error) return <div className="flex items-center justify-center w-full h-full bg-zinc-100 dark:bg-zinc-800 text-xs text-red-500">Failed</div>;
+    if (!url) return <div className="flex items-center justify-center w-full h-full bg-zinc-100 dark:bg-zinc-800"><Loader2 className="w-4 h-4 animate-spin text-zinc-400" /></div>;
 
-        // SECURITY FIX: Do NOT trust MIME alone - reject unknown file types
-        // Spoofed files could have image/* MIME but malicious content
-        console.warn("Unknown image format, magic bytes don't match known types");
-        return false;
-
-    } catch (e) {
-        console.error("Magic number check failed", e);
-        return false;
+    if (item.type === 'image' || item.type === 'video') {
+        return <img src={url} alt="Media" className="w-full h-full object-cover" />;
     }
+
+    if (item.type === 'audio') {
+        // Audio player needs to be wrapped or styled?
+        // It handles its own styles usually.
+        return <AudioPlayer src={url} accentColor={accentColor} />;
+    }
+
+    return null;
 };
 
 // ETERNAL SIGNED URL: 7-day URLs with localStorage cache + auto-refresh
@@ -195,7 +161,9 @@ export function JournalEditor({
     isGuest = false,
     onGuestAction,
     refreshTrigger = 0,
-    sttLanguage = "Auto"
+    sttLanguage = "Auto",
+    aiRewriteEnabled = false,
+    mediaDisplayMode = 'grid'
 }: JournalEditorProps) {
     const currentDate = date; // Define early for Ref usage
 
@@ -207,10 +175,10 @@ export function JournalEditor({
     const [content, setContent] = useState("");
 
     // Media State
-    const [imagePath, setImagePath] = useState<string | null>(null);
-    const [displayUrl, setDisplayUrl] = useState<string | null>(null);
-    const [audioPath, setAudioPath] = useState<string | null>(null);
-    const [audioDisplayUrl, setAudioDisplayUrl] = useState<string | null>(null);
+    const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+
+    // Derived state for backward compatibility references or specialized views if needed
+    // const [displayUrl, setDisplayUrl] = useState<string | null>(null); // Replaced by mediaItems render logic
 
     // UI State
     const [isLoading, setIsLoading] = useState(true);
@@ -222,17 +190,18 @@ export function JournalEditor({
     const [hasError, setHasError] = useState(false);
     const [isOffline, setIsOffline] = useState(!navigator.onLine);
     const [pendingSync, setPendingSync] = useState(false);
-    const [imageLoadError, setImageLoadError] = useState(false);
     const [isProcessingOCR, setIsProcessingOCR] = useState(false);
     const [showMicMenu, setShowMicMenu] = useState(false);
     const [showCameraMenu, setShowCameraMenu] = useState(false);
     const [recordingDuration, setRecordingDuration] = useState(0);
+    const [isRewriting, setIsRewriting] = useState(false);
 
     // Sync Status (UI-only for visual feedback)
     const [syncStatus, setSyncStatus] = useState<'local' | 'pending' | 'synced' | 'failed'>('synced');
 
     // History State
-    const [history, setHistory] = useState<Array<{ content: string; image: string | null; audio: string | null }>>([]);
+    // History State
+    const [history, setHistory] = useState<Array<{ content: string; mediaItems: MediaItem[] }>>([]);
     const [historyIndex, setHistoryIndex] = useState(-1);
 
     // --------------------------------------------------------------------------------
@@ -245,31 +214,26 @@ export function JournalEditor({
     const cameraMenuRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const activeBlobUrlRef = useRef<string | null>(null);
-    const imageRetryAttemptedRef = useRef(false); // FIX: Prevent infinite img onError loop
     const mimeTypeRef = useRef<string>('audio/webm');
     const ocrAbortControllerRef = useRef<AbortController | null>(null);
     const lastRefreshTimeRef = useRef<number>(0);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
-    const recognitionRef = useRef<SpeechRecognition | null>(null);
-    const webSpeechResultRef = useRef<string>(""); // Store Web Speech API result
-    const sttFinalBaseRef = useRef<string>(""); // Store final confirmed transcription chunks
-    const isWebSpeechActiveRef = useRef<boolean>(false);
     const contentRef = useRef(content);
-    const imagePathRef = useRef(imagePath);
-    const audioPathRef = useRef(audioPath);
+    const mediaItemsRef = useRef(mediaItems);
     const isDirtyRef = useRef(false);
     const isMountedRef = useRef(true);
     const activeDateRef = useRef(currentDate);
     const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
     const contentDateRef = useRef(format(date, 'yyyy-MM-dd'));
+    const micStreamRef = useRef<MediaStream | null>(null);
+    const onAudioBlobRef = useRef<((blob: Blob, duration: number) => void) | null>(null);
 
     // Sync refs with state
     useEffect(() => {
         contentRef.current = content;
-        imagePathRef.current = imagePath;
-        audioPathRef.current = audioPath;
-    }, [content, imagePath, audioPath]);
+        mediaItemsRef.current = mediaItems;
+    }, [content, mediaItems]);
 
     // Toast/Confirm UI (replaces native alert/confirm)
     const { showToast, showConfirm } = useToast();
@@ -327,14 +291,7 @@ export function JournalEditor({
                 mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
             }
 
-            // Stop SpeechRecognition if active
-            if (recognitionRef.current) {
-                try {
-                    recognitionRef.current.stop();
-                    recognitionRef.current = null;
-                } catch (e) { }
-            }
-            // Stop MediaRecorder if active
+            // NEW: Stop MediaRecorder if active
             if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
                 mediaRecorderRef.current.stop();
             }
@@ -363,108 +320,13 @@ export function JournalEditor({
         };
     }, []); // Run ONCE on mount/unmount
 
-    // --- Dual STT Initialization (Web Speech API) ---
-    useEffect(() => {
-        if (typeof window !== 'undefined') {
-            // MEMORY LEAK FIX: Stop and cleanup old recognition instance before creating new one
-            if (recognitionRef.current) {
-                try {
-                    recognitionRef.current.abort();
-                } catch (e) {
-                    // Ignore abort errors
-                }
-                recognitionRef.current = null;
-            }
-            // Also clear stale transcription data from previous sessions
-            webSpeechResultRef.current = "";
-
-            // Enable for BOTH Web and Native (Android WebView supports SpeechRecognition)
-            // @ts-ignore
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (SpeechRecognition) {
-                const recognition = new SpeechRecognition();
-                recognition.continuous = true;
-                recognition.interimResults = true;
-                recognition.lang = sttLanguage === "Auto" ? "en-US" : (sttLanguage === "Hindi" ? "hi-IN" : "en-US");
-
-                recognition.onresult = (event: SpeechRecognitionEvent) => {
-                    let finalTranscript = '';
-                    let interimTranscript = '';
-
-                    // @ts-ignore
-                    for (let i = event.resultIndex; i < event.results.length; ++i) {
-                        // @ts-ignore
-                        const transcript = event.results[i][0].transcript;
-                        // @ts-ignore
-                        if (event.results[i].isFinal) {
-                            finalTranscript += transcript;
-                        } else {
-                            interimTranscript += transcript;
-                        }
-                    }
-
-                    if (finalTranscript) {
-                        sttFinalBaseRef.current += (sttFinalBaseRef.current ? " " : "") + finalTranscript.trim();
-                    }
-
-                    // Combine final base with current interim guess
-                    const combined = (sttFinalBaseRef.current + " " + interimTranscript).trim();
-                    if (combined) {
-                        webSpeechResultRef.current = combined;
-                    }
-                };
-
-                // @ts-ignore
-                recognition.onerror = (event) => {
-                    if (event.error === 'network' || event.error === 'aborted' || event.error === 'no-speech') {
-                        if (event.error === 'no-speech' && isRecording) {
-                            showToast("No speech detected.", "warning");
-                        }
-                        return;
-                    }
-                    console.warn("Web Speech API Error:", event.error, event);
-                    isWebSpeechActiveRef.current = false;
-                    showToast(`Speech Error: ${event.error}`, "error");
-                };
-
-                recognition.onend = () => {
-                    isWebSpeechActiveRef.current = false;
-                };
-
-                recognitionRef.current = recognition;
-            }
-        }
-
-        // CLEANUP: Stop recognition on unmount or language change
-        return () => {
-            if (recognitionRef.current) {
-                try {
-                    recognitionRef.current.abort();
-                } catch (e) {
-                    // Ignore
-                }
-            }
-            webSpeechResultRef.current = "";
-        };
-    }, [sttLanguage]);
-
-    // Separate effect for URL cleanup avoids re-running global cleanup
-    useEffect(() => {
-        return () => {
-            // MEMORY LEAK FIX: Revoke any lingering blob URLs
-            if (displayUrl && displayUrl.startsWith('blob:')) {
-                URL.revokeObjectURL(displayUrl);
-            }
-        };
-    }, [displayUrl]);
-
     const syncPendingData = useCallback(async () => {
         const pendingRaw = localStorage.getItem('pending_journal_sync');
         if (!pendingRaw || !userId) return;
 
         setPendingSync(true);
         try {
-            const pendingEntries = JSON.parse(pendingRaw) as Record<string, { content: string; image_url?: string; audio_url?: string; updated_at?: string }>;
+            const pendingEntries = JSON.parse(pendingRaw) as Record<string, { content: string; media_items?: MediaItem[]; updated_at?: string }>;
             // CHRONOLOGICAL SYNC: Sort dates to prevent older data from overwriting newer entries
             const dates = Object.keys(pendingEntries).sort();
 
@@ -473,58 +335,44 @@ export function JournalEditor({
                 const localTimestamp = entry.updated_at ? new Date(entry.updated_at).getTime() : Date.now();
 
                 // OFFLINE MEDIA SYNC: Detect and upload local files
-                let finalImagePath = entry.image_url;
-                let finalAudioPath = entry.audio_url;
+                // We must process the media_items array
+                let finalMediaItems: MediaItem[] = [];
+                if (entry.media_items) {
+                    finalMediaItems = [...entry.media_items];
 
-                if (nativeMedia.isNative()) {
-                    // Sync Image
-                    if (entry.image_url?.startsWith('local://')) {
-                        try {
-                            const fileName = entry.image_url.replace('local://', '');
-                            const fileData = await Filesystem.readFile({
-                                path: fileName,
-                                directory: Directory.Data
-                            });
+                    if (nativeMedia.isNative()) {
+                        for (let i = 0; i < finalMediaItems.length; i++) {
+                            const item = finalMediaItems[i];
+                            if (item.url.startsWith('local://')) {
+                                try {
+                                    const fileName = item.url.replace('local://', '');
+                                    const fileData = await Filesystem.readFile({
+                                        path: fileName,
+                                        directory: Directory.Data
+                                    });
 
-                            const blob = new Blob([Uint8Array.from(atob(fileData.data as string), c => c.charCodeAt(0))], { type: 'image/webp' });
-                            const serverFileName = `${userId}/${Date.now()}-synced.webp`;
+                                    // Determine mime type and extension
+                                    let mimeType = item.type === 'image' ? 'image/webp' : 'audio/webm';
+                                    const ext = fileName.split('.').pop() || (item.type === 'image' ? 'webp' : 'webm');
+                                    if (item.type === 'audio') mimeType = `audio/${ext}`; // Better audio mime handling
 
-                            const { error: uploadError } = await supabase.storage
-                                .from('journal-media-private')
-                                .upload(serverFileName, blob);
+                                    const blob = new Blob([Uint8Array.from(atob(fileData.data as string), c => c.charCodeAt(0))], { type: mimeType });
+                                    const serverFileName = `${userId}/${Date.now()}-synced-${i}.${ext}`;
 
-                            if (!uploadError) {
-                                finalImagePath = serverFileName;
-                                await Filesystem.deleteFile({ path: fileName, directory: Directory.Data });
+                                    const { error: uploadError } = await supabase.storage
+                                        .from('journal-media-private')
+                                        .upload(serverFileName, blob);
+
+                                    if (!uploadError) {
+                                        // Update the item URL in our list
+                                        finalMediaItems[i] = { ...item, url: serverFileName, local_path: undefined }; // Clear local path if synced? Keep it?
+                                        // Clean up local file
+                                        await Filesystem.deleteFile({ path: fileName, directory: Directory.Data });
+                                    }
+                                } catch (e) {
+                                    console.error(`Local media sync failed for ${item.url}:`, e);
+                                }
                             }
-                        } catch (e) {
-                            console.error("Local image sync failed:", e);
-                        }
-                    }
-
-                    // Sync Audio
-                    if (entry.audio_url?.startsWith('local://')) {
-                        try {
-                            const fileName = entry.audio_url.replace('local://', '');
-                            const fileData = await Filesystem.readFile({
-                                path: fileName,
-                                directory: Directory.Data
-                            });
-
-                            const ext = fileName.split('.').pop() || 'webm';
-                            const blob = new Blob([Uint8Array.from(atob(fileData.data as string), c => c.charCodeAt(0))], { type: `audio/${ext}` });
-                            const serverFileName = `${userId}/audio-${Date.now()}-synced.${ext}`;
-
-                            const { error: uploadError } = await supabase.storage
-                                .from('journal-media-private')
-                                .upload(serverFileName, blob);
-
-                            if (!uploadError) {
-                                finalAudioPath = serverFileName;
-                                await Filesystem.deleteFile({ path: fileName, directory: Directory.Data });
-                            }
-                        } catch (e) {
-                            console.error("Local audio sync failed:", e);
                         }
                     }
                 }
@@ -554,8 +402,7 @@ export function JournalEditor({
                         user_id: userId,
                         date: dateKey,
                         content: entry.content,
-                        image_url: finalImagePath || null,
-                        audio_url: finalAudioPath || null,
+                        media_items: finalMediaItems, // Using new column
                         updated_at: new Date().toISOString()
                     }, { onConflict: 'user_id, date' });
 
@@ -629,12 +476,8 @@ export function JournalEditor({
         // STEP 0: Reset state ONLY if date has changed to prevent "Today" text showing on "Yesterday"
         if (isMountedRef.current && !isSameDateRefresh) {
             setContent("");
-            setImagePath(null);
-            setAudioPath(null);
-            setDisplayUrl(null);
-            setAudioDisplayUrl(null);
+            setMediaItems([]);
             setIsLoading(true);
-            setImageLoadError(false);
             isDirtyRef.current = false;
             contentDateRef.current = "";
         } else if (isMountedRef.current && isSameDateRefresh && !isLoading) {
@@ -649,8 +492,7 @@ export function JournalEditor({
             const cached = JSON.parse(cachedEntry);
             if (isMountedRef.current) {
                 setContent(cached.content || "");
-                setImagePath(cached.image_url || null);
-                setAudioPath(cached.audio_url || null);
+                setMediaItems(cached.media_items || []);
                 setEntryId(cached.id || null);
                 contentDateRef.current = dateStr;
             }
@@ -661,7 +503,7 @@ export function JournalEditor({
         try {
             const { data, error } = await supabase
                 .from('entries')
-                .select('id, content, image_url, audio_url, updated_at')
+                .select('id, content, media_items, updated_at')
                 .eq('user_id', userId)
                 .eq('date', dateStr)
                 .abortSignal(abortControllerRef.current.signal)
@@ -691,16 +533,14 @@ export function JournalEditor({
 
                 if (!isDirtyRef.current && isActiveDate) {
                     const newContent = data.content || "";
-                    const newImage = data.image_url || null;
-                    const newAudio = data.audio_url || null;
+                    const newMedia = data.media_items || [];
 
                     setContent(newContent);
-                    setImagePath(newImage);
-                    setAudioPath(newAudio);
+                    setMediaItems(newMedia);
                     setEntryId(data.id); // Bind to Server Identity
 
                     // Initialize History once data is loaded
-                    setHistory([{ content: newContent, image: newImage, audio: newAudio }]);
+                    setHistory([{ content: newContent, mediaItems: newMedia }]);
                     setHistoryIndex(0);
                 } else if (!isActiveDate) {
                     console.log("Fetch result discarded - user navigated away");
@@ -729,9 +569,9 @@ export function JournalEditor({
     useEffect(() => {
         // Reset history stack to current state when date changes
         // Use refs to get current values without adding them to dependencies
-        setHistory([{ content: contentRef.current, image: imagePathRef.current, audio: audioPathRef.current }]);
+        setHistory([{ content: contentRef.current, mediaItems: mediaItemsRef.current }]);
         setHistoryIndex(0);
-    }, [currentDate]); // ONLY currentDate - content changes handled by separate history effect
+    }, [currentDate]); // ONLY currentDate
 
     // VISIBILITY CHANGE & FOCUS HANDLER
     // Refresh signed URLs when app comes to foreground, but debounce heavily
@@ -764,116 +604,55 @@ export function JournalEditor({
         fetchEntry();
     }, [fetchEntry, refreshTrigger]);
 
-    // Image Signed URL - ETERNAL 7-DAY URLs with cache
-    useEffect(() => {
-        let cancelled = false;
-        // FIX: Reset retry counter on imagePath change for fresh retry logic
-        imageRetryAttemptedRef.current = false;
-
-        const loadSignedUrl = async () => {
-            if (!imagePath) {
-                if (isMountedRef.current && !cancelled) setDisplayUrl(null);
-                return;
-            }
-
-            // OFFLINE PREVIEW: Load from local filesystem
-            if (imagePath.startsWith('local://')) {
-                try {
-                    const fileName = imagePath.replace('local://', '');
-                    const fileData = await Filesystem.readFile({
-                        path: fileName,
-                        directory: Directory.Data
-                    });
-                    const url = `data:image/webp;base64,${fileData.data}`;
-                    if (isMountedRef.current && !cancelled) {
-                        setDisplayUrl(url);
-                        setImageLoadError(false);
-                    }
-                    return;
-                } catch (e) {
-                    console.error("Local preview failed:", e);
-                }
-            }
-
-            const url = await getEternalSignedUrl(imagePath);
-
-            if (isMountedRef.current && !cancelled) {
-                if (url) {
-                    setDisplayUrl(url);
-                    setImageLoadError(false);
-                } else {
-                    console.warn("Eternal signed URL creation failed for path:", imagePath);
-                    setImageLoadError(true);
-                }
-            }
-        };
-        loadSignedUrl();
-        return () => { cancelled = true; };
-    }, [imagePath]);
-
-    // Targeted retry for image loading with eternal URL
-    const refreshImageUrl = useCallback(async () => {
-        if (!imagePath) return;
-
-        setImageLoadError(false);
-
-        // Force refresh by clearing localStorage cache first
-        try {
-            localStorage.removeItem(`signed_url_journal-media-private_${imagePath}`);
-        } catch { }
-
-        const url = await getEternalSignedUrl(imagePath);
-
-        if (isMountedRef.current) {
-            if (url) {
-                setDisplayUrl(url);
-            } else {
-                setImageLoadError(true);
-                showToast("Failed to reload image", "error");
-            }
+    // --- Media Helpers ---
+    const addMedia = useCallback((newItem: MediaItem) => {
+        if (!canAddMedia(mediaItems, newItem.type)) {
+            const limit = newItem.type === 'audio' ? MEDIA_LIMITS.MAX_AUDIO : MEDIA_LIMITS.MAX_PHOTOS_VIDEOS;
+            showToast(`Limit Reached: You can only add ${limit} ${newItem.type} files.`, 'error');
+            return false;
         }
-    }, [imagePath, showToast]);
 
-    // Audio Signed URL - ETERNAL 7-DAY URLs with cache
-    useEffect(() => {
-        let cancelled = false;
-        const loadAudioUrl = async () => {
-            if (!audioPath) {
-                if (isMountedRef.current && !cancelled) setAudioDisplayUrl(null);
-                return;
+        setMediaItems(prev => [...prev, newItem]);
+        isDirtyRef.current = true;
+        return true;
+    }, [mediaItems, showToast]);
+
+    const removeMedia = useCallback(async (index: number) => {
+        const itemToRemove = mediaItems[index];
+        if (!itemToRemove) return;
+
+        const confirmed = await showConfirm({
+            title: "Delete Media",
+            message: "Delete this item? This cannot be undone.",
+            confirmText: "Delete",
+            cancelText: "Cancel"
+        });
+        if (!confirmed) return;
+
+        // Optimistic Remove
+        const previousItems = [...mediaItems];
+        setMediaItems(prev => prev.filter((_, i) => i !== index));
+        isDirtyRef.current = true;
+
+        try {
+            // Delete file logic
+            if (itemToRemove.url.startsWith('local://')) {
+                const fileName = itemToRemove.url.replace('local://', '');
+                await Filesystem.deleteFile({ path: fileName, directory: Directory.Data }).catch(e => console.warn("Local delete failed", e));
+            } else if (!itemToRemove.url.startsWith('http') && !itemToRemove.url.startsWith('blob:') && !itemToRemove.url.startsWith('data:')) {
+                // Supabase path
+                const { error } = await supabase.storage.from('journal-media-private').remove([itemToRemove.url]);
+                if (error) console.warn("Remote delete failed:", error);
             }
-
-            // OFFLINE PREVIEW: Load from local filesystem
-            if (audioPath.startsWith('local://')) {
-                try {
-                    const fileName = audioPath.replace('local://', '');
-                    const fileData = await Filesystem.readFile({
-                        path: fileName,
-                        directory: Directory.Data
-                    });
-                    const ext = fileName.split('.').pop() || 'webm';
-                    const url = `data:audio/${ext};base64,${fileData.data}`;
-                    if (isMountedRef.current && !cancelled) {
-                        setAudioDisplayUrl(url);
-                    }
-                    return;
-                } catch (e) {
-                    console.error("Local audio preview failed:", e);
-                }
-            }
-
-            const url = await getEternalSignedUrl(audioPath);
-
-            if (isMountedRef.current && !cancelled && url) {
-                setAudioDisplayUrl(url);
-            }
-        };
-        loadAudioUrl();
-        return () => { cancelled = true; };
-    }, [audioPath]);
+        } catch (e) {
+            console.error("Delete failed", e);
+            setMediaItems(previousItems); // Rollback
+            showToast("Failed to delete item", "error");
+        }
+    }, [mediaItems, showToast, showConfirm]);
 
     // Save Entry (Debounced with dirty flag to prevent data loss)
-    const saveEntry = useCallback(async (dateStr: string, currentContent: string, currentImagePath: string | null, currentAudioPath: string | null) => {
+    const saveEntry = useCallback(async (dateStr: string, currentContent: string, currentMediaItems: MediaItem[]) => {
         if (!userId) return;
 
         // Helper to safe-set localStorage (Quota Handling with LRU)
@@ -915,8 +694,7 @@ export function JournalEditor({
         const cacheData = {
             id: entryId, // Save Identity
             content: currentContent,
-            image_url: currentImagePath,
-            audio_url: currentAudioPath,
+            media_items: currentMediaItems,
             updated_at: new Date().toISOString()
         };
         safeSetItem(cacheKey, JSON.stringify(cacheData));
@@ -927,8 +705,7 @@ export function JournalEditor({
             const existing = existingRaw ? JSON.parse(existingRaw) : {};
             existing[dateStr] = {
                 content: currentContent,
-                image_url: currentImagePath,
-                audio_url: currentAudioPath,
+                media_items: currentMediaItems,
                 updated_at: cacheData.updated_at
             };
             safeSetItem('pending_journal_sync', JSON.stringify(existing));
@@ -953,8 +730,7 @@ export function JournalEditor({
                 .from('entries')
                 .update({
                     content: currentContent,
-                    image_url: currentImagePath,
-                    audio_url: currentAudioPath,
+                    media_items: currentMediaItems,
                     updated_at: new Date().toISOString()
                 })
                 .eq('id', entryId);
@@ -968,8 +744,7 @@ export function JournalEditor({
                     user_id: userId,
                     date: dateStr,
                     content: currentContent,
-                    image_url: currentImagePath,
-                    audio_url: currentAudioPath,
+                    media_items: currentMediaItems,
                     updated_at: new Date().toISOString()
                 }, { onConflict: 'user_id, date' })
                 .select('id') // GET THE IDENTITY
@@ -1026,7 +801,7 @@ export function JournalEditor({
         }
 
         const timeoutId = setTimeout(() => {
-            saveEntry(dateStr, content, imagePath, audioPath);
+            saveEntry(dateStr, content, mediaItems);
         }, 7000); // PRODUCTION: 7-second debounce to prevent API spam
 
         return () => {
@@ -1034,10 +809,10 @@ export function JournalEditor({
             // FIX: Use closure-captured `dateStr` (not ref) - this effect belongs to this specific date
             // Using ref was risky: if fetchEntry for new date runs before cleanup, ref has wrong date
             if (isDirtyRef.current && userId) {
-                saveEntry(dateStr, contentRef.current, imagePathRef.current, audioPathRef.current);
+                saveEntry(dateStr, contentRef.current, mediaItemsRef.current);
             }
         };
-    }, [content, imagePath, audioPath, currentDate, userId, isLoading, saveEntry]);
+    }, [content, mediaItems, currentDate, userId, isLoading, saveEntry]);
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -1057,14 +832,13 @@ export function JournalEditor({
             const lastState = history[historyIndex];
             const hasChanged = !lastState ||
                 lastState.content !== content ||
-                lastState.image !== imagePath ||
-                lastState.audio !== audioPath;
+                JSON.stringify(lastState.mediaItems) !== JSON.stringify(mediaItems);
 
             if (hasChanged) {
                 const timeoutId = setTimeout(() => {
                     setHistory(prev => {
                         const newHistory = prev.slice(0, historyIndex + 1);
-                        newHistory.push({ content, image: imagePath, audio: audioPath });
+                        newHistory.push({ content, mediaItems });
                         if (newHistory.length > 20) newHistory.shift();
                         return newHistory;
                     });
@@ -1073,15 +847,14 @@ export function JournalEditor({
                 return () => clearTimeout(timeoutId);
             }
         }
-    }, [content, imagePath, audioPath, adjustTextareaHeight, isLoading]);
+    }, [content, mediaItems, adjustTextareaHeight, isLoading]);
 
     const undo = useCallback(() => {
         if (historyIndex > 0) {
             isUndoingRedoingRef.current = true;
             const prevState = history[historyIndex - 1];
             setContent(prevState.content);
-            setImagePath(prevState.image);
-            setAudioPath(prevState.audio);
+            setMediaItems(prevState.mediaItems);
             setHistoryIndex(prev => prev - 1);
             setTimeout(() => { isUndoingRedoingRef.current = false; }, 50);
         }
@@ -1092,8 +865,7 @@ export function JournalEditor({
             isUndoingRedoingRef.current = true;
             const nextState = history[historyIndex + 1];
             setContent(nextState.content);
-            setImagePath(nextState.image);
-            setAudioPath(nextState.audio);
+            setMediaItems(nextState.mediaItems);
             setHistoryIndex(prev => prev + 1);
             setTimeout(() => { isUndoingRedoingRef.current = false; }, 50);
         }
@@ -1118,24 +890,20 @@ export function JournalEditor({
     const processFile = useCallback(async (file: File) => {
         if (!userId) return;
 
-        // OFFLINE PERSISTENCE: Save to local filesystem if offline
+        // OFFLINE CHECK
         if (!navigator.onLine && nativeMedia.isNative()) {
             try {
-                const objectUrl = URL.createObjectURL(file);
-                setDisplayUrl(objectUrl);
+                // Offline Logic for Native
                 setIsUploading(true);
 
-                // Convert file to base64
                 const reader = new FileReader();
-                const base64Promise = new Promise<string>((resolve, reject) => {
+                const base64Data = await new Promise<string>((resolve, reject) => {
                     reader.onload = () => resolve(reader.result as string);
                     reader.onerror = reject;
                     reader.readAsDataURL(file);
                 });
 
-                const base64Data = await base64Promise;
                 const fileName = `offline-image-${Date.now()}.webp`;
-
                 await Filesystem.writeFile({
                     path: fileName,
                     data: base64Data.split(',')[1],
@@ -1144,7 +912,7 @@ export function JournalEditor({
 
                 const localPath = `local://${fileName}`;
                 if (isMountedRef.current) {
-                    setImagePath(localPath);
+                    addMedia({ type: 'image', url: localPath });
                     showToast("Saved locally (offline mode)", "success");
                 }
                 return;
@@ -1158,104 +926,43 @@ export function JournalEditor({
         }
 
         if (!navigator.onLine) {
-            showToast("Cannot upload media while offline. Please reconnect.", "warning");
+            showToast("Cannot upload media while offline.", "warning");
             return;
         }
 
-        if (!(await validateImageFile(file))) {
-            showToast("Invalid image file. Please upload a valid image (JPEG, PNG, WebP, HEIC).", "error");
+        if (!file.type.startsWith('image/')) {
+            showToast("Invalid image file", "error");
             return;
-        }
-
-        // Size Check (Original)
-        if (file.size > JOURNAL_CONFIG.MAX_RAW_IMAGE_SIZE_MB * 1024 * 1024) {
-            showToast(`Image too large! Max: ${JOURNAL_CONFIG.MAX_RAW_IMAGE_SIZE_MB}MB`, "error");
-            return;
-        }
-
-        if (activeBlobUrlRef.current) {
-            URL.revokeObjectURL(activeBlobUrlRef.current);
         }
 
         setIsUploading(true);
-        // Optimistic preview
-        const objectUrl = URL.createObjectURL(file);
-        activeBlobUrlRef.current = objectUrl;
-        setDisplayUrl(objectUrl);
 
         try {
+            // Compress with specific target size from updated logic
             const compressedBlob = await compressImage(file, JOURNAL_CONFIG.IMAGE_UPLOAD_MAX_SIZE, 1500);
 
-            // COMPRESSION VALIDATION
-            if (!compressedBlob || compressedBlob.size === 0) {
-                throw new Error("Compression failed (empty result).");
-            }
-            if (compressedBlob.size > JOURNAL_CONFIG.MAX_COMPRESSED_IMAGE_SIZE_MB * 1024 * 1024) {
-                throw new Error("Image too complex. Please use a smaller image.");
-            }
+            if (!compressedBlob || compressedBlob.size === 0) throw new Error("Compression failed");
 
-            // SECURITY: Use UUID-only filename to prevent path injection attacks
-            // FIX: Add fallback for old browsers (Safari < 15.4) or HTTP contexts
-            const uuid = typeof crypto?.randomUUID === 'function'
-                ? crypto.randomUUID().slice(0, 8)
-                : Math.random().toString(36).slice(2, 10);
+            const uuid = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10);
             const fileName = `${userId}/${Date.now()}-${uuid}.webp`;
-            const compressedFile = new File([compressedBlob], fileName, { type: 'image/webp' });
 
-            const { error: uploadError } = await supabase.storage
+            const { error } = await supabase.storage
                 .from('journal-media-private')
-                .upload(fileName, compressedFile);
+                .upload(fileName, compressedBlob);
 
-            if (uploadError) throw uploadError;
+            if (error) throw error;
 
-            // MEMORY LEAK GUARD: Only update state if still mounted
             if (isMountedRef.current) {
-                // NAVIGATION RACE GUARD:
-                const isActiveDate = format(activeDateRef.current, 'yyyy-MM-dd') === format(currentDate, 'yyyy-MM-dd');
-                if (isActiveDate) {
-                    setImagePath(fileName);
-                } else {
-                    console.log("Image upload finished but user navigated away - discarding UI update");
-                }
+                addMedia({ type: 'image', url: fileName });
             }
 
         } catch (error: any) {
-            console.error("Image upload failed:", error);
-            if (isMountedRef.current) {
-                // FALLBACK: If compression failed but original is safe (< 10MB), use original
-                if (file.size < JOURNAL_CONFIG.MAX_COMPRESSED_IMAGE_SIZE_MB * 1024 * 1024) {
-                    console.warn("Compression failed, using original file as fallback.", error);
-
-                    // SECURITY: Use UUID-only filename for fallback too
-                    // FIX: Add fallback for old browsers (Safari < 15.4) or HTTP contexts
-                    const uuidFallback = typeof crypto?.randomUUID === 'function'
-                        ? crypto.randomUUID().slice(0, 8)
-                        : Math.random().toString(36).slice(2, 10);
-                    const fileName = `${userId}/${Date.now()}-${uuidFallback}.${file.name.split('.').pop() || 'jpg'}`;
-                    const { error: uploadError } = await supabase.storage
-                        .from('journal-media-private')
-                        .upload(fileName, file);
-
-                    if (uploadError) {
-                        showToast("Upload failed: " + uploadError.message, "error");
-                        setDisplayUrl(null);
-                        setImagePath(null);
-                    } else {
-                        setImagePath(fileName);
-                        showToast("Image uploaded (uncompressed fallback)", "warning");
-                    }
-                } else {
-                    showToast(error.message || "Failed to upload image. Try a smaller file.", "error");
-                    setDisplayUrl(null);
-                    setImagePath(null);
-                }
-            }
+            console.error("Upload failed", error);
+            showToast("Upload failed: " + error.message, "error");
         } finally {
-            if (isMountedRef.current) {
-                setIsUploading(false);
-            }
+            if (isMountedRef.current) setIsUploading(false);
         }
-    }, [userId]);
+    }, [userId, addMedia, showToast]);
 
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
@@ -1263,136 +970,53 @@ export function JournalEditor({
         e.target.value = "";
     };
 
-    const removeImage = async () => {
-        if (!userId || !imagePath) return;
+    // --- Audio Handler ---
+    const handleVoiceNote = async (audioBlob: Blob, duration?: number) => {
+        const finalDuration = duration ?? recordingDuration;
 
-        // UX SAFETY: Confirm before deletion with UI modal
-        const confirmed = await showConfirm({
-            title: "Delete Image",
-            message: "Delete this image? This cannot be undone.",
-            confirmText: "Delete",
-            cancelText: "Cancel"
-        });
-        if (!confirmed) return;
-
-        // ROLLBACK STATE
-        const previousPath = imagePath;
-        const previousUrl = displayUrl;
-
-        // Optimistic UI update
-        setImagePath(null);
-        setDisplayUrl(null);
-
-        try {
-            // STRATEGY: Update Database FIRST.
-            // If DB update fails, we can rollback UI and nothing is lost.
-            // If DB update succeeds but Storage delete fails, we just have an orphaned file (acceptable).
-
-            const dateStr = format(currentDate, 'yyyy-MM-dd');
-            const { error: dbError } = await supabase
-                .from('entries')
-                .update({ image_url: null, updated_at: new Date().toISOString() })
-                .eq('user_id', userId)
-                .eq('date', dateStr);
-
-            if (dbError) throw dbError;
-
-            if (previousPath.startsWith('local://')) {
-                const fileName = previousPath.replace('local://', '');
-                await Filesystem.deleteFile({
-                    path: fileName,
-                    directory: Directory.Data
-                });
-            } else {
-                // Now delete from storage
-                const { error: storageError } = await supabase.storage
-                    .from('journal-media-private')
-                    .remove([previousPath]);
-
-                if (storageError) {
-                    console.warn("Storage deletion failed (orphaned file):", storageError);
-                }
-            }
-
-            // Clean local cache properly
-            const cacheKey = `entry_cache_${userId}_${dateStr}`;
-            const cached = localStorage.getItem(cacheKey);
-            if (cached) {
-                const data = JSON.parse(cached);
-                data.image_url = null;
-                localStorage.setItem(cacheKey, JSON.stringify(data));
-            }
-
-        } catch (error) {
-            console.error("Failed to delete image:", error);
-            // Rollback Logic
-            if (isMountedRef.current) {
-                setImagePath(previousPath);
-                setDisplayUrl(previousUrl);
-                showToast("Failed to delete image. Please try again.", "error");
-            }
-        }
-    };
-
-    // --- Shared Upload Handlers ---
-    const handleVoiceNote = async (audioBlob: Blob) => {
-        // OFFLINE PERSISTENCE: Save to local filesystem if offline
         if (!navigator.onLine && nativeMedia.isNative()) {
+            // Offline Native Audio Logic
             try {
                 const reader = new FileReader();
-                const base64Promise = new Promise<string>((resolve, reject) => {
-                    reader.onload = () => resolve(reader.result as string);
-                    reader.onerror = reject;
+                const base64Data = await new Promise<string>((r, rej) => {
+                    reader.onload = () => r(reader.result as string);
+                    reader.onerror = rej;
                     reader.readAsDataURL(audioBlob);
                 });
-
-                const base64Data = await base64Promise;
                 const ext = audioBlob.type.includes('mp4') ? 'mp4' : 'webm';
                 const fileName = `offline-audio-${Date.now()}.${ext}`;
-
                 await Filesystem.writeFile({
                     path: fileName,
                     data: base64Data.split(',')[1],
                     directory: Directory.Data
                 });
-
-                const localPath = `local://${fileName}`;
                 if (isMountedRef.current) {
-                    setAudioPath(localPath);
-                    showToast("Voice note saved locally (offline)", "success");
+                    addMedia({ type: 'audio', url: `local://${fileName}`, duration_seconds: finalDuration });
+                    showToast("Voice note saved locally", "success");
                 }
                 return;
-            } catch (error) {
-                console.error("Offline audio save failed:", error);
-                showToast("Could not save voice note offline.", "error");
+            } catch (e) {
+                console.error("Offline audio save failed", e);
                 return;
             }
         }
 
         if (!navigator.onLine) {
-            showToast("Cannot upload voice note while offline. Please reconnect.", "warning");
+            showToast("Offline: Cannot upload voice note.", "warning");
             return;
         }
 
-        const type = audioBlob.type || 'audio/webm';
-        const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm';
+        const ext = audioBlob.type.includes('mp4') ? 'mp4' : audioBlob.type.includes('ogg') ? 'ogg' : 'webm';
         const fileName = `${userId}/audio-${Date.now()}.${ext}`;
 
-        const { error } = await supabase.storage
-            .from('journal-media-private')
-            .upload(fileName, audioBlob);
+        const { error } = await supabase.storage.from('journal-media-private').upload(fileName, audioBlob);
 
         if (error) {
-            console.error("Audio upload failed:", error);
-            showToast("Voice note upload failed.", "error");
-            if (isMountedRef.current) setHasError(true);
+            console.error("Audio upload failed", error);
+            showToast("Upload failed", "error");
         } else {
             if (isMountedRef.current) {
-                const isActiveDate = format(activeDateRef.current, 'yyyy-MM-dd') === format(currentDate, 'yyyy-MM-dd');
-                if (isActiveDate) {
-                    setAudioPath(fileName);
-                    setHasError(false);
-                }
+                addMedia({ type: 'audio', url: fileName, duration_seconds: finalDuration });
             }
         }
     };
@@ -1420,10 +1044,43 @@ export function JournalEditor({
 
     // --- Audio Logic ---
     const startAudioRecording = async () => {
-        // DOUBLE RECORDING GUARD: Prevent starting if already recording
+        // DOUBLE RECORDING GUARD
         if (isRecordingAudio || mediaRecorderRef.current?.state === "recording") {
-            console.warn("Recording already in progress, ignoring start request");
+            console.warn("Recording already in progress");
             return;
+        }
+
+        if (nativeMedia.isNative()) {
+            const hasPermission = await nativeMedia.nativeVoice.requestPermission();
+            if (!hasPermission) {
+                showToast("Microphone permission denied.", "error");
+                onAudioBlobRef.current = null;
+                setIsRecording(false);
+                return;
+            }
+            try {
+                await nativeMedia.nativeVoice.start();
+                setIsRecordingAudio(true);
+                setRecordingDuration(0);
+                recordingTimerRef.current = setInterval(() => {
+                    if (isMountedRef.current) {
+                        setRecordingDuration(prev => {
+                            if (prev >= JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS) {
+                                stopAudioRecording();
+                                return JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS;
+                            }
+                            return prev + 1;
+                        });
+                    }
+                }, 1000);
+                return;
+            } catch (err) {
+                console.error("Native recording start failed:", err);
+                showToast("Could not start microphone.", "error");
+                onAudioBlobRef.current = null;
+                setIsRecording(false);
+                return;
+            }
         }
 
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -1431,37 +1088,28 @@ export function JournalEditor({
             return;
         }
 
-        // PRE-FLIGHT CHECK: Network
         if (!navigator.onLine) {
             const confirmed = await showConfirm({
                 title: "You're Offline",
-                message: "Voice notes recorded offline will be saved locally but cannot be uploaded until you're back online.",
+                message: "Voice notes recorded offline will be saved locally.",
                 confirmText: "Record Anyway",
                 cancelText: "Cancel"
             });
             if (!confirmed) return;
         }
 
-        // TRACK REFERENCE: Keep stream reference for cleanup on error
         let stream: MediaStream | null = null;
-
         try {
             stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            micStreamRef.current = stream;
 
-            // MOBILE COMPATIBILITY: Check supported MIME types
+            // Check supported mime types
             let mimeType = 'audio/webm';
             if (typeof MediaRecorder.isTypeSupported === 'function') {
-                if (MediaRecorder.isTypeSupported('audio/webm')) {
-                    mimeType = 'audio/webm';
-                } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-                    mimeType = 'audio/mp4';
-                } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
-                    mimeType = 'audio/ogg';
-                }
-                // If none supported, let browser use default (but may fail on iOS if we force webm later)
+                if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
+                else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+                else if (MediaRecorder.isTypeSupported('audio/ogg')) mimeType = 'audio/ogg';
             }
-
-            // SAFARI FIX: Use the negotiated mime type
             mimeTypeRef.current = mimeType;
 
             const mediaRecorder = new MediaRecorder(stream, { mimeType });
@@ -1469,119 +1117,52 @@ export function JournalEditor({
             audioChunksRef.current = [];
 
             mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    audioChunksRef.current.push(event.data);
-                }
+                if (event.data.size > 0) audioChunksRef.current.push(event.data);
             };
 
             mediaRecorder.onstop = async () => {
-                // Stop timer
                 if (recordingTimerRef.current) {
                     clearInterval(recordingTimerRef.current);
                     recordingTimerRef.current = null;
                 }
-                if (isMountedRef.current) {
-                    setRecordingDuration(0);
-                }
+                const duration = recordingDuration; // Capture current duration
+                if (isMountedRef.current) setRecordingDuration(0);
 
-                // SAFARI FIX: Create blob with the correct MIME type
                 const audioBlob = new Blob(audioChunksRef.current, { type: mimeTypeRef.current });
 
-                // Extension handling
-                const type = mimeTypeRef.current;
-                const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm';
-                const fileName = `${userId}/audio-${Date.now()}.${ext}`;
-
-                const { error } = await supabase.storage
-                    .from('journal-media-private')
-                    .upload(fileName, audioBlob);
-
-                if (error) {
-                    console.error("Audio upload failed:", error);
-                    showToast("Voice note upload failed. Please check your connection and try again.", "error");
-                    if (isMountedRef.current) {
-                        setHasError(true);
-                    }
+                // CRITICAL: Differentiate between Transcription (STT) and Voice Note
+                if (onAudioBlobRef.current) {
+                    onAudioBlobRef.current(audioBlob, duration);
+                    onAudioBlobRef.current = null;
                 } else {
-                    const oldAudioPath = audioPathRef.current;
-
-                    // CRITICAL FIX: Update State FIRST.
-                    // This immediately triggers the debounced 'saveEntry' effect which handles the upsert cleanly.
-                    if (isMountedRef.current) {
-                        // NAVIGATION RACE GUARD:
-                        const isActiveDate = format(activeDateRef.current, 'yyyy-MM-dd') === format(currentDate, 'yyyy-MM-dd');
-                        if (isActiveDate) {
-                            setAudioPath(fileName);
-                            setHasError(false);
-                        } else {
-                            console.log("Audio recording finished but user navigated away - discarding UI update");
-                            return; // Do not schedule deletion of 'oldAudioPath' because we didn't actually replace it in this view
-                        }
-                    }
-
-                    // RACE CONDITION PREVENTION:
-                    // 1. We do NOT upsert here manualy to avoid conflict with the debounced saver.
-                    // 2. We delay the deletion of the OLD file slightly to ensure the new state persists 
-                    //    and the 'saveEntry' effect has captured the new 'fileName'.
-
-                    if (oldAudioPath) {
-                        // VERIFY DB UPDATE BEFORE DELETE
-                        setTimeout(async () => {
-                            try {
-                                const { data: entry } = await supabase
-                                    .from('entries')
-                                    .select('audio_url')
-                                    .eq('user_id', userId)
-                                    .eq('date', format(currentDate, 'yyyy-MM-dd'))
-                                    .single();
-
-                                // Only delete if DB confirms new file is saved (audio_url matches new fileName)
-                                if (entry?.audio_url === fileName) {
-                                    await supabase.storage.from('journal-media-private').remove([oldAudioPath]);
-                                    console.log("Old audio file safely deleted.");
-                                } else {
-                                    console.warn("Skipped old audio deletion - DB state mismatch.");
-                                }
-                            } catch (e) {
-                                console.error("Failed to cleanup old audio file:", e);
-                            }
-                        }, JOURNAL_CONFIG.AUDIO_DELETE_DELAY_MS);
-                    }
+                    handleVoiceNote(audioBlob, duration);
                 }
 
-                stream?.getTracks().forEach(track => track.stop());
+                setIsRecordingAudio(false);
+                micStreamRef.current?.getTracks().forEach(track => track.stop());
+                micStreamRef.current = null;
             };
 
             mediaRecorder.start();
             setIsRecordingAudio(true);
-
-            // Start recording timer with LIMIT check
             setRecordingDuration(0);
             recordingTimerRef.current = setInterval(() => {
                 if (isMountedRef.current) {
                     setRecordingDuration(prev => {
-                        // 5 MINUTE LIMIT
                         if (prev >= JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS) {
                             stopAudioRecording();
-                            showToast("Recording limit reached (5 mins).", "info");
                             return JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS;
                         }
                         return prev + 1;
                     });
                 }
             }, 1000);
-        } catch (error: any) {
-            // CRITICAL: Stop stream tracks if we acquired them before error
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-            }
 
+        } catch (error: any) {
+            if (stream) stream.getTracks().forEach(track => track.stop());
+            micStreamRef.current = null;
             console.error("Error starting audio:", error);
-            if (error.name === 'NotAllowedError') {
-                showToast("Microphone access denied. Please enable microphone permissions in settings.", "error");
-            } else {
-                showToast("Could not start microphone: " + error.message, "error");
-            }
+            showToast("Could not start microphone: " + error.message, "error");
         }
     };
 
@@ -1597,8 +1178,15 @@ export function JournalEditor({
             }
 
             if (result) {
-                await handleVoiceNote(result.blob);
+                // Respect STT callback if present
+                if (onAudioBlobRef.current) {
+                    onAudioBlobRef.current(result.blob, recordingDuration);
+                    onAudioBlobRef.current = null;
+                } else {
+                    await handleVoiceNote(result.blob, recordingDuration);
+                }
             }
+            if (isMountedRef.current) setRecordingDuration(0);
             return;
         }
 
@@ -1612,268 +1200,95 @@ export function JournalEditor({
         }
     };
 
+    const stopTranscriptionRecording = async () => {
+        if (!isRecording) return;
 
-    const removeAudio = async () => {
-        if (!userId || !audioPath) return;
-
-        const confirmed = await showConfirm({
-            title: "Delete Voice Note",
-            message: "Delete this voice note? This cannot be undone.",
-            confirmText: "Delete",
-            cancelText: "Cancel"
-        });
-        if (!confirmed) return;
-
-        // ROLLBACK STATE
-        const previousPath = audioPath;
-        const previousUrl = audioDisplayUrl;
-
-        setAudioPath(null);
-        setAudioDisplayUrl(null);
-
-        try {
-            // DB FIRST Strategy
-            const dateStr = format(currentDate, 'yyyy-MM-dd');
-            const { error: dbError } = await supabase
-                .from('entries')
-                .update({ audio_url: null, updated_at: new Date().toISOString() })
-                .eq('user_id', userId)
-                .eq('date', dateStr);
-
-            if (dbError) throw dbError;
-
-            if (previousPath.startsWith('local://')) {
-                const fileName = previousPath.replace('local://', '');
-                await Filesystem.deleteFile({
-                    path: fileName,
-                    directory: Directory.Data
-                });
-            } else {
-                const { error: storageError } = await supabase.storage
-                    .from('journal-media-private')
-                    .remove([previousPath]);
-
-                if (storageError) {
-                    console.warn("Storage deletion failed (orphaned file):", storageError);
-                }
-            }
-
-            // Update cache
-            const cacheKey = `entry_cache_${userId}_${dateStr}`;
-            const cached = localStorage.getItem(cacheKey);
-            if (cached) {
-                const data = JSON.parse(cached);
-                data.audio_url = null;
-                localStorage.setItem(cacheKey, JSON.stringify(data));
-            }
-
-        } catch (error) {
-            console.error("Failed to delete voice note:", error);
-            if (isMountedRef.current) {
-                setAudioPath(previousPath);
-                setAudioDisplayUrl(previousUrl);
-                showToast("Failed to delete voice note.", "error");
-            }
-        }
+        // Use central stop logic to ensure all states (including isRecordingAudio) are reset
+        await stopAudioRecording();
+        setIsRecording(false);
     };
 
-    // --- STT Logic (Native on Android, Web Speech API on Browser) ---
+
+
+
+    // --- STT Logic (Strictly Whisper-Only) ---
     const [isTranscribing, setIsTranscribing] = useState(false);
-    const nativeListenerRef = useRef<any>(null);
 
     const toggleRecording = useCallback(async () => {
-        const isAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+        if (!navigator.onLine) {
+            showToast("Internet required for transcription.", "warning");
+            return;
+        }
 
         if (isRecording) {
             // --- STOP RECORDING ---
-            setIsRecording(false);
-            if (recordingTimerRef.current) {
-                clearInterval(recordingTimerRef.current);
-                recordingTimerRef.current = null;
-            }
-
-            if (isAndroid) {
-                // STOP NATIVE ANDROID STT
-                try {
-                    await NativeSpeechRecognition.stop();
-                    if (nativeListenerRef.current) {
-                        await nativeListenerRef.current.remove();
-                        nativeListenerRef.current = null;
-                    }
-                } catch (e) {
-                    console.warn("Native STT stop error:", e);
-                }
-
-                // Get final result
-                setIsTranscribing(true);
-                setTimeout(() => {
-                    if (isMountedRef.current) {
-                        const text = webSpeechResultRef.current;
-                        if (text && text.trim().length > 0) {
-                            setContent(prev => {
-                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                return prev + (needsSpace ? ' ' : '') + text.trim();
-                            });
-                            showToast("Transcribed", "success");
-                        } else {
-                            showToast("No speech detected.", "warning");
-                        }
-                        setIsTranscribing(false);
-                    }
-                }, 300);
-            } else {
-                // STOP WEB SPEECH API
-                if (recognitionRef.current && isWebSpeechActiveRef.current) {
-                    try {
-                        recognitionRef.current.stop();
-                    } catch (e) {
-                        console.warn("Recognition stop error:", e);
-                    }
-                    isWebSpeechActiveRef.current = false;
-                }
-
-                // Cleanup mic stream
-                if ((mediaRecorderRef as any).currentStream) {
-                    const stream = (mediaRecorderRef as any).currentStream;
-                    stream.getTracks().forEach((track: any) => track.stop());
-                    (mediaRecorderRef as any).currentStream = null;
-                }
-
-                setIsTranscribing(true);
-                setTimeout(() => {
-                    if (isMountedRef.current) {
-                        const text = webSpeechResultRef.current;
-                        if (text && text.trim().length > 0) {
-                            setContent(prev => {
-                                const needsSpace = prev.length > 0 && !prev.endsWith(' ');
-                                return prev + (needsSpace ? ' ' : '') + text.trim();
-                            });
-                            showToast("Transcribed", "success");
-                        } else {
-                            showToast("No speech detected.", "warning");
-                        }
-                        setIsTranscribing(false);
-                    }
-                }, 500);
-            }
+            stopTranscriptionRecording();
         } else {
             // --- START RECORDING ---
-            webSpeechResultRef.current = "";
-            sttFinalBaseRef.current = "";
 
-            if (isAndroid) {
-                // START NATIVE ANDROID STT (Works Offline!)
-                try {
-                    const permResult = await NativeSpeechRecognition.requestPermissions();
-                    if (permResult.speechRecognition !== 'granted') {
-                        showToast("Microphone permission denied.", "error");
-                        return;
+            // 1. SET TRANSCRIPTION CALLBACK
+            onAudioBlobRef.current = async (blob: Blob) => {
+                setIsTranscribing(true);
+
+                const tryTranscribe = async (model: string) => {
+                    try {
+                        return await transcribeAudio(blob, model, sttLanguage);
+                    } catch (e) {
+                        console.error(`Transcription with ${model} failed`, e);
+                        return null;
                     }
+                };
 
-                    const available = await NativeSpeechRecognition.available();
-                    if (!available.available) {
-                        showToast("Speech recognition not available.", "error");
-                        return;
-                    }
+                const executeFlow = async () => {
+                    // TIER 1: Main Model
+                    let result = await tryTranscribe("whisper-large-v3");
+                    if (result?.trim()) return result;
 
-                    // Set up listener for partial results
-                    nativeListenerRef.current = await NativeSpeechRecognition.addListener('partialResults', (data: { matches: string[] }) => {
-                        if (data.matches && data.matches.length > 0) {
-                            // Store partial as potential result
-                            webSpeechResultRef.current = data.matches[0];
-                        }
-                    });
+                    // TIER 1.5: Instant Fallback
+                    result = await tryTranscribe("whisper-large-v3-turbo");
+                    if (result?.trim()) return result;
 
-                    // Add a final result listener for maximum accuracy
-                    const finalListener = await NativeSpeechRecognition.addListener('results', (data: { matches: string[] }) => {
-                        if (data.matches && data.matches.length > 0) {
-                            // Overwrite with the final confirmed text
-                            webSpeechResultRef.current = data.matches[0];
-                        }
-                    });
+                    // TIER 2: Full Retry Cycle (once more)
+                    result = await tryTranscribe("whisper-large-v3");
+                    if (result?.trim()) return result;
 
-                    // Store both to remove later
-                    const originalRemove = nativeListenerRef.current.remove;
-                    nativeListenerRef.current.remove = async () => {
-                        try {
-                            if (originalRemove) await originalRemove();
-                            if (finalListener) await finalListener.remove();
-                        } catch (e) {
-                            console.warn("Error removing native listeners:", e);
-                        }
-                    };
-
-                    // Determine language
-                    let lang = 'en-US';
-                    if (sttLanguage === 'Hindi') lang = 'hi-IN';
-                    else if (sttLanguage === 'Hinglish') lang = 'hi-IN'; // Use Hindi, closest match
-
-                    await NativeSpeechRecognition.start({
-                        language: lang,
-                        partialResults: true,
-                        popup: false, // Use inline recognition, no popup
-                    });
-
-                    setIsRecording(true);
-                    setRecordingDuration(0);
-                    recordingTimerRef.current = setInterval(() => {
-                        if (isMountedRef.current) {
-                            setRecordingDuration(prev => {
-                                if (prev >= JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS) {
-                                    toggleRecording();
-                                    showToast("Recording limit reached.", "info");
-                                    return JOURNAL_CONFIG.MAX_RECORDING_DURATION_SECONDS;
-                                }
-                                return prev + 1;
-                            });
-                        }
-                    }, 1000);
-
-                } catch (error: any) {
-                    console.error("Native STT error:", error);
-                    showToast("Could not start speech recognition.", "error");
-                }
-            } else {
-                // START WEB SPEECH API (Browser)
-                if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
-                    showToast("Speech recognition not supported.", "error");
-                    return;
-                }
+                    result = await tryTranscribe("whisper-large-v3-turbo");
+                    return result;
+                };
 
                 try {
-                    // NOTE: Removed manual getUserMedia to avoid conflicts on mobile
-                    if (recognitionRef.current) {
-                        try {
-                            recognitionRef.current.start();
-                            isWebSpeechActiveRef.current = true;
-                        } catch (e: any) {
-                            if (e.name !== 'InvalidStateError') {
-                                console.warn("Failed to start Web Speech API", e);
-                                showToast("Could not start speech recognition.", "error");
-                                return;
-                            } else {
-                                isWebSpeechActiveRef.current = true;
-                            }
-                        }
-                    }
+                    const finalResult = await executeFlow();
 
-                    setIsRecording(true);
-                    setRecordingDuration(0);
-                    recordingTimerRef.current = setInterval(() => {
-                        setRecordingDuration(prev => prev + 1);
-                    }, 1000);
-
-                } catch (error: any) {
-                    console.error("Error starting STT:", error);
-                    if (error.name === 'NotAllowedError') {
-                        showToast("Microphone access denied.", "error");
-                    } else {
-                        showToast("Could not access microphone.", "error");
+                    if (isMountedRef.current && finalResult?.trim()) {
+                        setContent(prev => {
+                            const needsSpace = prev.length > 0 && !prev.endsWith(' ');
+                            return prev + (needsSpace ? ' ' : '') + finalResult.trim();
+                        });
+                        showToast("Transcription complete", "success");
+                    } else if (isMountedRef.current) {
+                        showToast("Speech could not be processed. Please try again.", "error");
                     }
+                } catch (err: any) {
+                    console.error("Critical transcription error:", err);
+                    if (isMountedRef.current) {
+                        showToast("Transcription failed. Check your connection.", "error");
+                    }
+                } finally {
+                    if (isMountedRef.current) setIsTranscribing(false);
                 }
+            };
+
+            // 2. START RECORDING
+            try {
+                startAudioRecording();
+                setIsRecording(true);
+            } catch (err) {
+                console.error("Failed to start audio recording", err);
+                showToast("Could not access microphone.", "error");
+                onAudioBlobRef.current = null;
             }
         }
-    }, [isRecording, sttLanguage, showToast, isMountedRef, setContent, startAudioRecording, NativeSpeechRecognition, recognitionRef]);
+    }, [isRecording, sttLanguage, showToast, isMountedRef, setContent, startAudioRecording, stopTranscriptionRecording]);
 
     const triggerHaptic = useCallback((pattern: number | number[] = 10) => {
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
@@ -1964,7 +1379,7 @@ export function JournalEditor({
 
         if (!userId) return;
 
-        if (!(await validateImageFile(file))) {
+        if (!file.type.startsWith('image/')) {
             showToast("Invalid image file.", "error");
             return;
         }
@@ -2117,7 +1532,7 @@ export function JournalEditor({
                     onBlur={() => {
                         const dateStr = format(currentDate, 'yyyy-MM-dd');
                         if (isDirtyRef.current && userId && contentDateRef.current === dateStr) {
-                            saveEntry(dateStr, content, imagePath, audioPath);
+                            saveEntry(dateStr, content, mediaItems);
                         }
                     }}
                     onFocus={(e) => {
@@ -2137,98 +1552,77 @@ export function JournalEditor({
                     spellCheck={false}
                 />
 
-                <div className="absolute bottom-[-30px] left-0 flex items-center gap-2 transition-opacity opacity-0 group-hover:opacity-100">
-                    <button
-                        onClick={undo}
-                        disabled={historyIndex <= 0}
-                        className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors disabled:opacity-30"
-                        title="Undo (Ctrl+Z)"
-                    >
-                        <ChevronLeft className="w-4 h-4" />
-                    </button>
-                    <button
-                        onClick={redo}
-                        disabled={historyIndex >= history.length - 1}
-                        className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors disabled:opacity-30"
-                        title="Redo (Ctrl+Y)"
-                    >
-                        <ChevronRight className="w-4 h-4" />
-                    </button>
-                    <span className="text-[10px] text-zinc-400 font-mono ml-1">
-                        {historyIndex + 1}/{history.length}
-                    </span>
-                </div>
+                <div className="flex items-center justify-between mt-2 px-1">
+                    <div className="flex items-center gap-2 transition-opacity opacity-0 group-hover:opacity-100">
+                        <button
+                            onClick={undo}
+                            disabled={historyIndex <= 0}
+                            className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors disabled:opacity-30"
+                            title="Undo (Ctrl+Z)"
+                        >
+                            <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <button
+                            onClick={redo}
+                            disabled={historyIndex >= history.length - 1}
+                            className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded transition-colors disabled:opacity-30"
+                            title="Redo (Ctrl+Y)"
+                        >
+                            <ChevronRight className="w-4 h-4" />
+                        </button>
+                        <span className="text-[10px] text-zinc-400 font-mono ml-1">
+                            {historyIndex + 1}/{history.length}
+                        </span>
+                    </div>
 
-                <div className="absolute bottom-[-30px] right-0 text-xs font-mono transition-opacity opacity-0 group-hover:opacity-100 flex items-center gap-2">
-                    {hasError ? <span className="text-red-500 font-semibold">Failed to save</span> :
-                        isRecording ? <span className="flex items-center gap-2 text-red-500 font-semibold animate-pulse"><span className="w-2 h-2 rounded-full bg-red-500" />Recording...</span> :
-                            isLoading ? <span className="flex items-center gap-2 text-zinc-500"><span className="w-2 h-2 rounded-full bg-zinc-500 animate-pulse" />Syncing...</span> :
-                                isOffline ? <span className="text-orange-500 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500" />Offline (Saved locally)</span> :
-                                    pendingSync ? <span className="text-blue-500 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />Syncing...</span> :
-                                        isSaving ? <span className="text-zinc-500">Saving...</span> :
-                                            <span className="text-zinc-600">Saved</span>}
+                    <div className="flex items-center gap-3 transition-opacity opacity-0 group-hover:opacity-100">
+                        {aiRewriteEnabled && content.trim().length > 0 && (
+                            <button
+                                onClick={async () => {
+                                    if (isGuest && onGuestAction) {
+                                        onGuestAction();
+                                        return;
+                                    }
+                                    if (isRewriting) return;
+                                    setIsRewriting(true);
+                                    try {
+                                        const { performRewrite } = await import("@/utils/ai");
+                                        const result = await performRewrite(content);
+                                        if (result) {
+                                            setContent(result);
+                                            showToast("Entry polished with AI", "success");
+                                        }
+                                    } catch (e: any) {
+                                        showToast(e.message || "Rewrite failed", "error");
+                                    } finally {
+                                        setIsRewriting(false);
+                                    }
+                                }}
+                                disabled={isRewriting}
+                                className={cn(
+                                    "p-2 rounded-full transition-all",
+                                    isRewriting ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 animate-pulse" : "bg-zinc-100 dark:bg-zinc-800/80 hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:scale-110"
+                                )}
+                                title="Refine with AI"
+                            >
+                                {isRewriting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className={cn("w-4 h-4", accentObj.class)} />}
+                            </button>
+                        )}
+
+                        <div className="text-xs font-mono">
+                            {hasError ? <span className="text-red-500 font-semibold">Failed to save</span> :
+                                isRecording ? <span className="flex items-center gap-2 text-red-500 font-semibold animate-pulse"><span className="w-2 h-2 rounded-full bg-red-500" />Recording...</span> :
+                                    isLoading ? <span className="flex items-center gap-2 text-zinc-500"><span className="w-2 h-2 rounded-full bg-zinc-500 animate-pulse" />Syncing...</span> :
+                                        isOffline ? <span className="text-orange-500 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500" />Offline (Saved locally)</span> :
+                                            pendingSync ? <span className="text-blue-500 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />Syncing...</span> :
+                                                isSaving ? <span className="text-zinc-500">Saving...</span> :
+                                                    <span className="text-zinc-600">Saved</span>}
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            {/* Media Previews */}
-            {displayUrl && (
-                <div className="relative w-full max-w-sm mx-auto mt-6 mb-8 group/image">
-                    <div className="relative rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-100/50 dark:bg-zinc-900/50 shadow-xl dark:shadow-2xl">
-                        {imageLoadError ? (
-                            <div className="w-full h-48 flex flex-col items-center justify-center gap-2 text-zinc-500">
-                                <X className="w-8 h-8" />
-                                <span className="text-sm">Image failed to load</span>
-                                <button
-                                    onClick={refreshImageUrl}
-                                    className="text-xs text-blue-500 hover:underline"
-                                >
-                                    Retry
-                                </button>
-                            </div>
-                        ) : (
-                            <img
-                                src={displayUrl}
-                                alt={`Journal entry for ${format(currentDate, 'MMMM d, yyyy')}`}
-                                className="w-full h-auto max-h-[500px] object-contain transition-transform duration-700 hover:scale-[1.02]"
-                                onError={() => {
-                                    const capturedPath = imagePath;
-                                    if (capturedPath && !imageLoadError && !imageRetryAttemptedRef.current) {
-                                        imageRetryAttemptedRef.current = true;
-                                        try { safeStorage.removeItem(`signed_url_journal-media-private_${capturedPath}`); } catch { }
-                                        getEternalSignedUrl(capturedPath).then(newUrl => {
-                                            if (newUrl && isMountedRef.current && imagePathRef.current === capturedPath) {
-                                                setDisplayUrl(newUrl);
-                                            } else if (isMountedRef.current && imagePathRef.current === capturedPath) {
-                                                setImageLoadError(true);
-                                            }
-                                        }).catch(() => {
-                                            if (isMountedRef.current && imagePathRef.current === capturedPath) {
-                                                setImageLoadError(true);
-                                            }
-                                        });
-                                        return;
-                                    }
-                                    setImageLoadError(true);
-                                }}
-                                onLoad={() => setImageLoadError(false)}
-                            />
-                        )}
-                        <div className="absolute inset-0 bg-black/0 group-hover/image:bg-black/20 transition-colors" />
-                    </div>
-                    <button
-                        onClick={removeImage}
-                        className="absolute -top-2 -right-2 px-2 py-1 bg-white dark:bg-zinc-900 rounded-full border border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-white hover:border-red-500 hover:bg-red-500 transition-all shadow-lg flex items-center gap-1 group/del-btn"
-                    >
-                        <X className="w-3 h-3" />
-                        <span className="text-[10px] font-medium hidden group-hover/del-btn:block">Delete</span>
-                    </button>
-                </div>
-            )}
-
-            {audioDisplayUrl && (
-                <AudioPlayer src={audioDisplayUrl} onDelete={removeAudio} accentColor={accentColor} />
-            )}
-
+            {/* Inputs & Action Bar (Now above media for instant access) */}
             <input
                 type="file"
                 ref={fileInputRef}
@@ -2246,14 +1640,13 @@ export function JournalEditor({
                 className="hidden"
             />
 
-            {/* Action Bar */}
-            <div className="flex w-full justify-center gap-8 mt-4 select-none">
+            <div className="flex w-full justify-center gap-10 mt-10 mb-2 select-none">
                 {/* Voice Group */}
                 <div className="relative" ref={micMenuRef}>
                     <button
                         onClick={handleMicButtonClick}
                         className={cn(
-                            "group p-3.5 rounded-full transition-all duration-300 relative",
+                            "group p-4 rounded-full transition-all duration-300 relative",
                             isRecording ? "bg-zinc-200 dark:bg-zinc-800 ring-4 ring-zinc-300/30 dark:ring-zinc-700/30" :
                                 isRecordingAudio ? "bg-red-500 scale-110 shadow-lg shadow-red-500/20" :
                                     showMicMenu ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700" :
@@ -2318,7 +1711,7 @@ export function JournalEditor({
                         onClick={handleCameraButtonClick}
                         disabled={isUploading || isProcessingOCR}
                         className={cn(
-                            "group p-3.5 rounded-full transition-all duration-300 disabled:opacity-50 relative",
+                            "group p-4 rounded-full transition-all duration-300 disabled:opacity-50 relative",
                             isProcessingOCR ? "bg-blue-500/20 ring-4 ring-blue-500/20" :
                                 showCameraMenu ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700" :
                                     "hover:bg-black/5 dark:hover:bg-white/10"
@@ -2361,6 +1754,67 @@ export function JournalEditor({
                     )}
                 </div>
             </div>
+
+            {/* Media Display */}
+            {mediaItems.length > 0 && (
+                <div className="w-full max-w-2xl mx-auto mt-6 mb-10">
+                    {/* Images/Videos Display */}
+                    {mediaItems.some(i => i.type === 'image' || i.type === 'video') && (
+                        <div className={cn(
+                            mediaDisplayMode === 'grid' ? "grid grid-cols-2 gap-3" :
+                                mediaDisplayMode === 'swipe' ? "flex overflow-x-auto snap-x snap-mandatory no-scrollbar gap-4 pb-4" :
+                                    "flex flex-col gap-6"
+                        )}>
+                            {mediaItems.map((item, index) => {
+                                if (item.type !== 'image' && item.type !== 'video') return null;
+                                return (
+                                    <div
+                                        key={item.url + index}
+                                        className={cn(
+                                            "relative group rounded-xl overflow-hidden bg-zinc-100 dark:bg-zinc-800 shadow-sm border border-zinc-200 dark:border-zinc-700",
+                                            mediaDisplayMode === 'grid' ? "aspect-video" :
+                                                mediaDisplayMode === 'swipe' ? "min-w-[85vw] md:min-w-[400px] aspect-video snap-center" :
+                                                    "w-full aspect-video"
+                                        )}
+                                    >
+                                        <MediaItemView item={item} />
+                                        <button
+                                            onClick={() => removeMedia(index)}
+                                            className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500 rounded-full text-white backdrop-blur-sm transition-colors opacity-0 group-hover:opacity-100"
+                                            title="Remove media"
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    {/* Audio List (Always a list as it feels most natural) */}
+                    <div className="space-y-2 mt-6">
+                        {mediaItems.map((item, index) => {
+                            if (item.type !== 'audio') return null;
+                            return (
+                                <div key={item.url + index} className="relative group">
+                                    <MediaItemView item={item} accentColor={accentColor} />
+                                    <button
+                                        onClick={() => removeMedia(index)}
+                                        className="absolute top-1/2 -translate-y-1/2 -right-8 p-1.5 text-zinc-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                                        title="Remove audio"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            )
+                        })}
+                    </div>
+                </div>
+            )}
+
+
+
+
         </div>
     );
 }

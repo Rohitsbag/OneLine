@@ -6,8 +6,8 @@ export const JOURNAL_CONFIG = {
     OCR_TIMEOUT_MS: 20000,
     AUDIO_DELETE_DELAY_MS: 2500,
 
-    // Recording limits  
-    MAX_RECORDING_DURATION_SECONDS: 300, // 5 minutes
+    // Recording limits (HARD ENFORCED - auto-stop on limit)
+    MAX_RECORDING_DURATION_SECONDS: 180, // 3 minutes max for audio/video
 
     // Size limits
     MAX_RAW_IMAGE_SIZE_MB: 50,

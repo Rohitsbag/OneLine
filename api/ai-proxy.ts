@@ -89,8 +89,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 throw fetchError;
             }
 
-        } else if (body.action === "transcribe") {
-            // Audio Transcription (for STT)
+        } else if (body.action === "transcribe" || body.action === "translate") {
+            // Audio Transcription or Translation (for STT)
             if (!body.audio) {
                 return res.status(400).json({ error: "No audio provided" });
             }
@@ -106,6 +106,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
 
             // Select model
+            const isTranslate = body.action === "translate";
+            const endpoint = isTranslate ? "translations" : "transcriptions";
             const model = ALLOWED_WHISPER_MODELS.includes(body.model)
                 ? body.model
                 : "whisper-large-v3";
@@ -116,11 +118,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             formData.append("file", audioBlob, "audio.webm");
             formData.append("model", model);
 
+            if (body.language && !isTranslate) {
+                formData.append("language", body.language);
+            }
+            if (body.prompt) {
+                formData.append("prompt", body.prompt);
+            }
+            formData.append("temperature", "0");
+
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 60000);
 
             try {
-                const response = await fetch(`${GROQ_BASE_URL}/audio/transcriptions`, {
+                const response = await fetch(`${GROQ_BASE_URL}/audio/${endpoint}`, {
                     method: "POST",
                     headers: {
                         "Authorization": `Bearer ${GROQ_API_KEY}`,

@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Lock, Delete, LogOut, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/utils/supabase/client";
 import { verifyPin } from "@/utils/security";
+
+const LOCKOUT_STORAGE_KEY = 'pin_lockout_until';
+const LOCKOUT_ATTEMPTS_KEY = 'pin_lockout_attempts';
 
 interface PinLockProps {
     onUnlock: () => void;
@@ -14,9 +17,26 @@ export function PinLock({ onUnlock, accentColor = "bg-indigo-500", storedPin }: 
     // Current PIN Entry State
     const [pin, setPin] = useState("");
     const [error, setError] = useState(false);
-    const [attempts, setAttempts] = useState(0);
-    const [lockoutUntil, setLockoutUntil] = useState<number | null>(null);
+    const [attempts, setAttempts] = useState(() => {
+        // Load persisted attempts
+        const saved = localStorage.getItem(LOCKOUT_ATTEMPTS_KEY);
+        return saved ? parseInt(saved, 10) : 0;
+    });
+    const [lockoutUntil, setLockoutUntil] = useState<number | null>(() => {
+        // Load persisted lockout
+        const saved = localStorage.getItem(LOCKOUT_STORAGE_KEY);
+        if (saved) {
+            const until = parseInt(saved, 10);
+            // Only use if still valid
+            if (until > Date.now()) return until;
+            // Clear expired lockout
+            localStorage.removeItem(LOCKOUT_STORAGE_KEY);
+            localStorage.removeItem(LOCKOUT_ATTEMPTS_KEY);
+        }
+        return null;
+    });
     const [isVerifying, setIsVerifying] = useState(false);
+    const [isOffline, setIsOffline] = useState(!navigator.onLine);
 
     // Forgot PIN / Reset Flow State
     const [showForgot, setShowForgot] = useState(false);
@@ -28,7 +48,36 @@ export function PinLock({ onUnlock, accentColor = "bg-indigo-500", storedPin }: 
 
     const targetLength = storedPin?.length || 4;
 
+    // Persist lockout state and listen for online/offline
+    useEffect(() => {
+        const handleOnline = () => setIsOffline(false);
+        const handleOffline = () => setIsOffline(true);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, []);
+
+    // Clear expired lockout on interval
+    useEffect(() => {
+        if (!lockoutUntil) return;
+        const interval = setInterval(() => {
+            if (lockoutUntil && Date.now() >= lockoutUntil) {
+                setLockoutUntil(null);
+                localStorage.removeItem(LOCKOUT_STORAGE_KEY);
+            }
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [lockoutUntil]);
+
     const handleForgotPin = async () => {
+        // OFFLINE GUARD: Cannot reset PIN without internet
+        if (isOffline) {
+            alert("Internet connection required to reset PIN. Please connect and try again.");
+            return;
+        }
         setIsSendingOtp(true);
         const { data: { user } } = await supabase.auth.getUser();
         if (user?.email) {
@@ -136,15 +185,23 @@ export function PinLock({ onUnlock, accentColor = "bg-indigo-500", storedPin }: 
                 const isValid = await verifyPin(user.id, newPin, deviceSalt, storedHash);
 
                 if (isValid) {
+                    // Clear lockout state on success
                     setAttempts(0);
+                    localStorage.removeItem(LOCKOUT_ATTEMPTS_KEY);
+                    localStorage.removeItem(LOCKOUT_STORAGE_KEY);
                     onUnlock();
                 } else {
                     const newAttempts = attempts + 1;
                     setAttempts(newAttempts);
+                    // Persist attempts
+                    localStorage.setItem(LOCKOUT_ATTEMPTS_KEY, newAttempts.toString());
                     setError(true);
 
                     if (newAttempts >= 5) {
-                        setLockoutUntil(Date.now() + 30000);
+                        const lockoutTime = Date.now() + 30000;
+                        setLockoutUntil(lockoutTime);
+                        // Persist lockout
+                        localStorage.setItem(LOCKOUT_STORAGE_KEY, lockoutTime.toString());
                         setPin("");
                     }
 

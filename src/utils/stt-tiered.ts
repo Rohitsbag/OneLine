@@ -3,11 +3,11 @@
  * Handles network quality detection and model selection
  */
 
-export type NetworkTier = "high-quality" | "data-saver" | "offline";
+export type NetworkTier = "high-quality" | "data-saver";
 
 export function detectNetworkTier(): NetworkTier {
     if (!navigator.onLine) {
-        return "offline";
+        return "data-saver";
     }
 
     // @ts-ignore - connection API is not fully typed in all environments
@@ -35,6 +35,6 @@ export function getSTTModel(tier: NetworkTier): string {
         case "data-saver":
             return "whisper-large-v3-turbo";
         default:
-            return "offline"; // Should use Web Speech API
+            return "whisper-large-v3-turbo";
     }
 }

@@ -3,6 +3,7 @@ import { format, addMonths, subMonths, startOfMonth, endOfMonth, eachDayOfInterv
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { ACCENT_COLORS } from "@/constants/colors";
+import { supabase } from "@/utils/supabase/client";
 
 interface CalendarOverlayProps {
     isOpen: boolean;
@@ -13,10 +14,12 @@ interface CalendarOverlayProps {
     initialViewDate?: Date;
     onMonthChange?: (date: Date) => void;
     accentColor?: string;
+    userId?: string | null; // Optional: if provided, show entry dots
 }
 
-export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, minDate, initialViewDate, onMonthChange, accentColor = "bg-indigo-500" }: CalendarOverlayProps) {
+export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, minDate, initialViewDate, onMonthChange, accentColor = "bg-indigo-500", userId }: CalendarOverlayProps) {
     const [viewDate, setViewDate] = useState(initialViewDate || selectedDate);
+    const [entryDates, setEntryDates] = useState<Set<string>>(new Set());
     const accentObj = ACCENT_COLORS.find(c => c.bgClass === accentColor) || ACCENT_COLORS[0];
     const hoverTextClass = accentObj.hoverTextClass || "hover:text-white";
 
@@ -25,6 +28,34 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
             setViewDate(initialViewDate || selectedDate);
         }
     }, [isOpen, initialViewDate, selectedDate]);
+
+    // Fetch entry dates for the current month
+    useEffect(() => {
+        if (!isOpen || !userId) return;
+
+        const fetchEntryDates = async () => {
+            const monthStart = startOfMonth(viewDate);
+            const monthEnd = endOfMonth(viewDate);
+
+            const { data, error } = await supabase
+                .from('entries')
+                .select('date, content')
+                .eq('user_id', userId)
+                .gte('date', format(monthStart, 'yyyy-MM-dd'))
+                .lte('date', format(monthEnd, 'yyyy-MM-dd'))
+                .not('content', 'is', null);
+
+            if (!error && data) {
+                // Only include entries with non-empty content (after trimming whitespace)
+                const datesWithContent = data
+                    .filter(e => e.content && e.content.trim().length > 0)
+                    .map(e => e.date);
+                setEntryDates(new Set(datesWithContent));
+            }
+        };
+
+        fetchEntryDates();
+    }, [isOpen, userId, viewDate]);
 
     if (!isOpen) return null;
 
@@ -92,13 +123,15 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
 
                 <div className="grid grid-cols-7 gap-2">
                     {Array.from({ length: startPadding }).map((_, i) => (
-                        <div key={`start-${i}`} className="h-10 w-10" />
+                        <div key={`start-${i}`} className="h-12 w-10" />
                     ))}
 
                     {daysInMonth.map(day => {
+                        const dateStr = format(day, 'yyyy-MM-dd');
                         const isSelected = isSameDay(day, selectedDate);
                         const isCurrentMonth = isSameMonth(day, viewDate);
                         const isToday = isSameDay(day, new Date());
+                        const hasEntry = entryDates.has(dateStr);
 
                         // Disable if before minDate (compare without time, SAFE COPY)
                         const isDisabled = minDate ? day < new Date(new Date(minDate).setHours(0, 0, 0, 0)) : false;
@@ -114,23 +147,31 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
                                 }}
                                 disabled={isDisabled}
                                 className={cn(
-                                    "h-10 w-10 rounded-full flex items-center justify-center transition-all",
+                                    "h-12 w-10 rounded-xl flex flex-col items-center justify-center transition-all gap-0.5",
                                     isSelected ? cn(accentColor, "text-white font-semibold") : "text-zinc-900 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-zinc-800",
                                     !isCurrentMonth && "text-zinc-400 dark:text-zinc-600",
                                     isToday && !isSelected && "border border-zinc-300 dark:border-zinc-700",
                                     isDisabled && "text-zinc-300 dark:text-zinc-600 opacity-50 cursor-not-allowed hover:bg-transparent"
                                 )}
                             >
-                                {format(day, "d")}
+                                <span>{format(day, "d")}</span>
+                                {/* Entry indicator dot */}
+                                {hasEntry && (
+                                    <div className={cn(
+                                        "w-1 h-1 rounded-full opacity-50",
+                                        isSelected ? "bg-white opacity-60" : accentColor
+                                    )} />
+                                )}
                             </button>
                         );
                     })}
 
                     {Array.from({ length: Math.max(0, endPadding) }).map((_, i) => (
-                        <div key={`end-${i}`} className="h-10 w-10" />
+                        <div key={`end-${i}`} className="h-12 w-10" />
                     ))}
                 </div>
             </div>
         </div>
     );
 }
+
