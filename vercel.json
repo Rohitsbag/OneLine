@@ -1,6 +1,14 @@
 {
     "rewrites": [
         {
+            "source": "/docs",
+            "destination": "https://resolvia.mintlify.dev/docs"
+        },
+        {
+            "source": "/docs/:path*",
+            "destination": "https://resolvia.mintlify.dev/docs/:path*"
+        },
+        {
             "source": "/(.*)",
             "destination": "/index.html"
         }
