@@ -1,0 +1,66 @@
+---
+title: 'API Overview'
+description: 'REST API endpoints for journal access'
+---
+
+# API Overview
+
+The OneLine REST API provides programmatic access to your journal entries.
+
+## Base URL
+
+```
+https://ytnovnqeugzmcazavbvz.supabase.co/functions/v1/api-gateway
+```
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/v1/entries` | List journal entries |
+| POST | `/v1/entries` | Create or update an entry |
+| GET | `/v1/search` | Search entries |
+
+## Request Format
+
+All requests must include:
+
+- `Authorization` header with your API key
+- `Content-Type: application/json` for POST requests
+
+## Response Format
+
+Successful responses include:
+
+```json
+{
+  "data": [...],
+  "_meta": {
+    "request_id": "uuid",
+    ...
+  }
+}
+```
+
+## Error Format
+
+Errors follow [RFC 7807](https://tools.ietf.org/html/rfc7807) Problem Details:
+
+```json
+{
+  "type": "https://api.oneline.app/errors/bad-request",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "Missing required field: date",
+  "trace_id": "abc-123-def"
+}
+```
+
+## Rate Limits
+
+| Type | Limit |
+|------|-------|
+| Read operations | 120 requests/minute |
+| Write operations | 60 requests/minute |
+
+When rate limited, you'll receive a `429` response with a `Retry-After` header.

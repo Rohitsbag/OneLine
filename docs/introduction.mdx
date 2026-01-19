@@ -1,0 +1,51 @@
+---
+title: Introduction
+description: 'Welcome to the OneLine API documentation'
+---
+
+# Welcome to OneLine API
+
+OneLine is a minimalist journaling app that helps you capture one meaningful moment each day. The API lets you programmatically access your journal entries and integrate with AI agents.
+
+<CardGroup cols={2}>
+  <Card
+    title="REST API"
+    icon="code"
+    href="/api-reference/overview"
+  >
+    Read and write journal entries via HTTP
+  </Card>
+  <Card
+    title="MCP Server"
+    icon="robot"
+    href="/mcp/overview"
+  >
+    Connect AI agents like Claude Desktop
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+<Steps>
+  <Step title="Create an API Key">
+    Open OneLine → Settings → API Access → New Key
+  </Step>
+  <Step title="Copy Your Secret">
+    Save the key immediately - it's only shown once!
+  </Step>
+  <Step title="Make Your First Request">
+    ```bash
+    curl -X GET "https://ytnovnqeugzmcazavbvz.supabase.co/functions/v1/api-gateway/v1/entries" \
+      -H "Authorization: Bearer oline_YOUR_KEY.YOUR_SECRET"
+    ```
+  </Step>
+</Steps>
+
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **Entries API** | Read, create, and update journal entries |
+| **Search** | Full-text search across your journal |
+| **MCP Server** | AI agent integration via SSE |
+| **Rate Limiting** | 120 reads / 60 writes per minute |

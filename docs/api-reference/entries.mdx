@@ -1,0 +1,87 @@
+---
+title: 'Entries'
+description: 'Read and write journal entries'
+api: 'GET /v1/entries'
+---
+
+# Entries
+
+Manage your journal entries via the API.
+
+## List Entries
+
+<ParamField query="start_date" type="string">
+  Start date in `YYYY-MM-DD` format. Default: 30 days ago.
+</ParamField>
+
+<ParamField query="end_date" type="string">
+  End date in `YYYY-MM-DD` format. Default: today.
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum entries to return (1-100). Default: 30.
+</ParamField>
+
+<RequestExample>
+```bash
+curl -X GET "https://ytnovnqeugzmcazavbvz.supabase.co/functions/v1/api-gateway/v1/entries?start_date=2024-01-01&end_date=2024-01-31" \
+  -H "Authorization: Bearer oline_YOUR_KEY.YOUR_SECRET"
+```
+</RequestExample>
+
+<ResponseExample>
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "date": "2024-01-15",
+      "content": "Today I learned about APIs...",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ],
+  "pagination": {
+    "has_more": false,
+    "limit": 30
+  }
+}
+```
+</ResponseExample>
+
+---
+
+## Create/Update Entry
+
+<ParamField body="date" type="string" required>
+  Date in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField body="content" type="string" required>
+  Entry content (max 100KB).
+</ParamField>
+
+<RequestExample>
+```bash
+curl -X POST "https://ytnovnqeugzmcazavbvz.supabase.co/functions/v1/api-gateway/v1/entries" \
+  -H "Authorization: Bearer oline_YOUR_KEY.YOUR_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"date": "2024-01-15", "content": "Hello from the API!"}'
+```
+</RequestExample>
+
+<ResponseExample>
+```json
+{
+  "data": {
+    "entry_id": "uuid",
+    "entry_date": "2024-01-15",
+    "entry_content": "Hello from the API!",
+    "entry_updated_at": "2024-01-15T10:30:00Z"
+  }
+}
+```
+</ResponseExample>
+
+<Note>
+If an entry already exists for the given date, it will be replaced with the new content.
+</Note>

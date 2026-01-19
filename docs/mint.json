@@ -1,0 +1,71 @@
+{
+    "$schema": "https://mintlify.com/schema.json",
+    "name": "OneLine API",
+    "logo": {
+        "dark": "/logo/dark.svg",
+        "light": "/logo/light.svg"
+    },
+    "favicon": "/favicon.svg",
+    "colors": {
+        "primary": "#6366f1",
+        "light": "#818cf8",
+        "dark": "#4f46e5",
+        "anchors": {
+            "from": "#6366f1",
+            "to": "#8b5cf6"
+        }
+    },
+    "topbarLinks": [
+        {
+            "name": "Support",
+            "url": "mailto:support@oneline.app"
+        }
+    ],
+    "topbarCtaButton": {
+        "name": "Dashboard",
+        "url": "https://oneline.app"
+    },
+    "tabs": [
+        {
+            "name": "API Reference",
+            "url": "api-reference"
+        }
+    ],
+    "anchors": [
+        {
+            "name": "GitHub",
+            "icon": "github",
+            "url": "https://github.com/Rohitsbag/OneLine"
+        }
+    ],
+    "navigation": [
+        {
+            "group": "Get Started",
+            "pages": [
+                "introduction",
+                "authentication"
+            ]
+        },
+        {
+            "group": "API Reference",
+            "pages": [
+                "api-reference/overview",
+                "api-reference/entries",
+                "api-reference/search"
+            ]
+        },
+        {
+            "group": "MCP Server",
+            "pages": [
+                "mcp/overview",
+                "mcp/tools"
+            ]
+        }
+    ],
+    "footerSocials": {
+        "github": "https://github.com/Rohitsbag/OneLine"
+    },
+    "api": {
+        "baseUrl": "https://ytnovnqeugzmcazavbvz.supabase.co/functions/v1/api-gateway"
+    }
+}

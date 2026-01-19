@@ -1,0 +1,68 @@
+---
+title: 'MCP Overview'
+description: 'Connect AI agents to OneLine via MCP'
+---
+
+# MCP Server
+
+OneLine provides an MCP (Model Context Protocol) server that allows AI agents like Claude Desktop to access your journal.
+
+## What is MCP?
+
+MCP is an open protocol that enables AI assistants to securely access external tools and data sources. With MCP, you can:
+
+- Let Claude search your journal
+- Have AI summarize your entries
+- Allow agents to add notes to your journal
+
+## Quick Start
+
+<Steps>
+  <Step title="Get an API Key">
+    Create a key with all scopes in Settings → API Access
+  </Step>
+  <Step title="Configure Claude Desktop">
+    Add the MCP server to your Claude Desktop config
+  </Step>
+  <Step title="Start Chatting">
+    Ask Claude about your journal entries!
+  </Step>
+</Steps>
+
+## SSE Endpoint
+
+```
+https://ytnovnqeugzmcazavbvz.supabase.co/functions/v1/mcp-server/sse
+```
+
+The MCP server uses Server-Sent Events (SSE) for real-time communication.
+
+## Claude Desktop Configuration
+
+Add this to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "oneline-journal": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://ytnovnqeugzmcazavbvz.supabase.co/functions/v1/mcp-server/sse"],
+      "env": {
+        "AUTHORIZATION": "Bearer oline_YOUR_KEY.YOUR_SECRET"
+      }
+    }
+  }
+}
+```
+
+## Session Limits
+
+| Limit | Value |
+|-------|-------|
+| Tool calls per session | 20 |
+| Session timeout | 5 minutes |
+| Heartbeat interval | 30 seconds |
+
+<Warning>
+Sessions are automatically terminated if the API key is revoked.
+</Warning>

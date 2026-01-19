@@ -1,0 +1,115 @@
+---
+title: 'MCP Tools'
+description: 'Available tools for AI agents'
+---
+
+# MCP Tools
+
+The OneLine MCP server provides four tools for AI agents.
+
+## Tool Overview
+
+| Tool | Risk Level | Required Scope | Description |
+|------|------------|----------------|-------------|
+| `search_journal` | Low | `read:entries` | Full-text search |
+| `get_entry` | Low | `read:entries` | Get entry by date |
+| `append_entry` | High | `write:entries` | Append to entry |
+| `summarize_period` | Medium | `read:insights` | Get entries for period |
+
+---
+
+## search_journal
+
+Search across all journal entries.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | Yes | Search query |
+| `limit` | number | No | Max results (1-10) |
+
+**Example:**
+```json
+{
+  "name": "search_journal",
+  "arguments": {
+    "query": "vacation",
+    "limit": 5
+  }
+}
+```
+
+---
+
+## get_entry
+
+Retrieve a specific journal entry by date.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `date` | string | Yes | Date (YYYY-MM-DD) |
+
+**Example:**
+```json
+{
+  "name": "get_entry",
+  "arguments": {
+    "date": "2024-01-15"
+  }
+}
+```
+
+---
+
+## append_entry
+
+Append content to an existing entry (or create new).
+
+<Warning>
+This is a **high-risk** tool that modifies your journal. Use with caution.
+</Warning>
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `date` | string | Yes | Date (YYYY-MM-DD) |
+| `content` | string | Yes | Content to append (max 5KB) |
+
+**Example:**
+```json
+{
+  "name": "append_entry",
+  "arguments": {
+    "date": "2024-01-15",
+    "content": "Note added by Claude: This day was significant because..."
+  }
+}
+```
+
+---
+
+## summarize_period
+
+Get all entries within a date range for summarization.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `start_date` | string | Yes | Start date (YYYY-MM-DD) |
+| `end_date` | string | Yes | End date (YYYY-MM-DD) |
+
+**Limits:**
+- Maximum 30-day range
+- Returns raw entries (AI summarization done by agent)
+
+**Example:**
+```json
+{
+  "name": "summarize_period",
+  "arguments": {
+    "start_date": "2024-01-01",
+    "end_date": "2024-01-31"
+  }
+}
+```

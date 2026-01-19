@@ -1,0 +1,64 @@
+---
+title: 'Search'
+description: 'Search journal entries'
+api: 'GET /v1/search'
+---
+
+# Search
+
+Search across all your journal entries using full-text search.
+
+## Parameters
+
+<ParamField query="q" type="string" required>
+  Search query (2-200 characters).
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum results (1-10). Default: 10.
+</ParamField>
+
+## Example Request
+
+<RequestExample>
+```bash
+curl -X GET "https://ytnovnqeugzmcazavbvz.supabase.co/functions/v1/api-gateway/v1/search?q=vacation" \
+  -H "Authorization: Bearer oline_YOUR_KEY.YOUR_SECRET"
+```
+</RequestExample>
+
+<ResponseExample>
+```json
+{
+  "data": [
+    {
+      "entry_date": "2024-07-15",
+      "entry_content": "Planning a vacation to the mountains...",
+      "score": 0.85
+    },
+    {
+      "entry_date": "2024-07-20",
+      "entry_content": "The vacation was amazing!",
+      "score": 0.72
+    }
+  ],
+  "_meta": {
+    "request_id": "abc-123-def",
+    "query": "vacation",
+    "result_count": 2
+  }
+}
+```
+</ResponseExample>
+
+## How Search Works
+
+The search uses case-insensitive substring matching with similarity scoring:
+
+- **Exact matches** score higher than partial matches
+- Results are sorted by similarity score, then by date
+- Maximum 10 results per query
+
+<Tip>
+Use specific keywords for better results. For example, search for "birthday" instead of "day".
+</Tip>

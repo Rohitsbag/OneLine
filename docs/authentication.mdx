@@ -1,0 +1,73 @@
+---
+title: Authentication
+description: 'How to authenticate with the OneLine API'
+---
+
+# Authentication
+
+All API requests require an API key in the `Authorization` header.
+
+## Key Format
+
+```
+Authorization: Bearer oline_<key_id>.<secret>
+```
+
+- `oline_` - Prefix identifying OneLine keys
+- `key_id` - 32-character public identifier
+- `secret` - 64-character secret (only shown once)
+
+## Creating an API Key
+
+<Steps>
+  <Step title="Open Settings">
+    In the OneLine app, tap the gear icon to open Settings
+  </Step>
+  <Step title="Navigate to API Access">
+    Scroll down to the **API Access** section
+  </Step>
+  <Step title="Create New Key">
+    Click **New Key**, enter a name, and select permissions
+  </Step>
+  <Step title="Copy the Secret">
+    <Warning>
+      The secret is only shown once! Copy it immediately and store it securely.
+    </Warning>
+  </Step>
+</Steps>
+
+## Scopes
+
+| Scope | Description |
+|-------|-------------|
+| `read:entries` | Read journal entries and search |
+| `write:entries` | Create and update entries |
+| `read:insights` | Access AI-generated summaries |
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Never expose your API key">
+    Treat your API key like a password. Don't commit it to version control or share it publicly.
+  </Accordion>
+  <Accordion title="Use minimal scopes">
+    Only request the permissions you need. If you only need to read entries, don't request write access.
+  </Accordion>
+  <Accordion title="Rotate keys regularly">
+    Revoke old keys and create new ones periodically. You can do this in Settings → API Access.
+  </Accordion>
+</AccordionGroup>
+
+## Error Responses
+
+If authentication fails, you'll receive a `401 Unauthorized` response:
+
+```json
+{
+  "type": "https://api.oneline.app/errors/unauthorized",
+  "title": "Unauthorized",
+  "status": 401,
+  "detail": "Invalid API key",
+  "trace_id": "abc-123-def"
+}
+```
