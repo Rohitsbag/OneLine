@@ -22,8 +22,8 @@
         }
     ],
     "topbarCtaButton": {
-        "name": "Dashboard",
-        "url": "https://oneline.app"
+        "name": "Open App",
+        "url": "https://get-one-line.vercel.app"
     },
     "tabs": [
         {
