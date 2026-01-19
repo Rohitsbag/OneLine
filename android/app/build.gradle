@@ -11,7 +11,7 @@ android {
         applicationId "com.oneline.app"
         minSdk 24
         targetSdk 36
-        versionCode System.getenv("VERSION_CODE") ? System.getenv("VERSION_CODE").toInteger() : 25
+        versionCode System.getenv("VERSION_CODE") ? System.getenv("VERSION_CODE").toInteger() : 26
         versionName System.getenv("VERSION_NAME") ?: "1.5.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

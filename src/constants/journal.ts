@@ -1,13 +1,13 @@
 export const JOURNAL_CONFIG = {
     // Timing
-    AUTOSAVE_DEBOUNCE_MS: 7000,
+    AUTOSAVE_DEBOUNCE_MS: 15000,
     SIGNED_URL_EXPIRY_SECONDS: 604800, // 7 days
     VISIBILITY_REFRESH_DEBOUNCE_MS: 10000,
     OCR_TIMEOUT_MS: 20000,
     AUDIO_DELETE_DELAY_MS: 2500,
 
     // Recording limits (HARD ENFORCED - auto-stop on limit)
-    MAX_RECORDING_DURATION_SECONDS: 180, // 3 minutes max for audio/video
+    MAX_RECORDING_DURATION_SECONDS: 600, // 10 minutes max for audio/video
 
     // Size limits
     MAX_RAW_IMAGE_SIZE_MB: 50,

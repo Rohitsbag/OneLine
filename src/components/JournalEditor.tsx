@@ -11,7 +11,7 @@ import { useToast } from "./Toast";
 import { JOURNAL_CONFIG } from "@/constants/journal";
 import * as nativeMedia from "@/utils/native-media";
 import { Filesystem, Directory } from '@capacitor/filesystem';
-import { MediaItem, MEDIA_LIMITS, canAddMedia } from "@/types/media";
+import { MediaItem, canAddMedia } from "@/types/media";
 
 
 // Fix Types for SpeechRecognition (REMOVED: Using Whisper Only)
@@ -608,9 +608,9 @@ export function JournalEditor({
 
     // --- Media Helpers ---
     const addMedia = useCallback((newItem: MediaItem) => {
-        if (!canAddMedia(mediaItems, newItem.type)) {
-            const limit = newItem.type === 'audio' ? MEDIA_LIMITS.MAX_AUDIO : MEDIA_LIMITS.MAX_PHOTOS_VIDEOS;
-            showToast(`Limit Reached: You can only add ${limit} ${newItem.type} files.`, 'error');
+        const validation = canAddMedia(mediaItems, newItem.type);
+        if (!validation.canAdd) {
+            showToast(validation.reason || `Limit Reached: You can only add multiple media files.`, 'error');
             return false;
         }
 

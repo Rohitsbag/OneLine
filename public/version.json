@@ -1,6 +1,6 @@
 {
     "version": "1.5.0",
-    "versionCode": 25,
+    "versionCode": 26,
     "downloadUrl": "https://get-one-line.vercel.app/oneline.apk",
     "sha256": "pending",
     "releaseNotes": "v1.5: AI & Developer Ecosystem update. Full API access, MCP Server support, up to 10 media items per entry, and offline-first reliability.",
