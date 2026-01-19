@@ -1,6 +1,6 @@
 {
-    "version": "1.0.19",
-    "versionCode": 19,
+    "version": "1.0.20",
+    "versionCode": 20,
     "downloadUrl": "https://get-one-line.vercel.app/oneline.apk",
     "sha256": "d3a02758390acda5b1da2c0c47e6f2def6ef32d063bf75d6a64f1b3315ce7610",
     "releaseNotes": "STT Fix: Simplified transcription using Web Speech API for improved Android compatibility.",
