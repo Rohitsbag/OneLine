@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { format, subDays } from "date-fns";
 import { Header } from "@/components/Header";
 import { JournalEditor } from "@/components/JournalEditor";
@@ -8,8 +8,15 @@ import { WeeklyReflection } from "@/components/WeeklyReflection";
 import { CalendarOverlay } from "@/components/CalendarOverlay";
 import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { supabase } from "@/utils/supabase/client";
-import { useNavigate } from "react-router-dom";
 import { SignInModal } from "@/components/SignInModal";
+
+// NEW INFRASTRUCTURE
+import { Storage, STORAGE_KEYS } from "@/utils/storage";
+import { useNetworkStatus } from "@/hooks/useNetworkStatus";
+import { useAuth } from "@/hooks/useAuth";
+import { useSettings } from "@/hooks/useSettings";
+import { OfflineQueue } from "@/utils/offlineQueue";
+import { WifiOff } from "lucide-react";
 
 interface JournalPageProps {
     externalPinCode?: string | null;
@@ -28,58 +35,82 @@ export function JournalPage({
     initialPinSetupRequired,
     onPinSetupComplete
 }: JournalPageProps) {
+    // --------------------------------------------------------------------------------
+    // INFRASTRUCTURE & SHARED STATE
+    // --------------------------------------------------------------------------------
+    const { connected: isOnline } = useNetworkStatus();
+    const { userId, isGuest, isLoading: isLoadingAuth, createdAt: userCreatedAt } = useAuth(isOnline);
+    const { settings, updateSetting, refresh: refreshSettings } = useSettings(userId, isOnline);
+
+    // UI Local State
     const [showCalendar, setShowCalendar] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [showTimeline, setShowTimeline] = useState(false);
+    const [showAuthModal, setShowAuthModal] = useState(false);
     const [selectedDate, setSelectedDate] = useState(new Date());
-    const [userId, setUserId] = useState<string | null>(null);
-    const [aiEnabled, setAiEnabled] = useState(false); // DEFAULT: OFF as requested
-    const [aiRewriteEnabled, setAiRewriteEnabled] = useState(false); // DEFAULT: OFF
-    const [sttLanguage, setSttLanguage] = useState("Auto");
-    const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-    const [notificationTime, setNotificationTime] = useState("20:00");
-    const [accentColor, setAccentColor] = useState("bg-indigo-500");
-    const [mediaDisplayMode, setMediaDisplayMode] = useState<'grid' | 'swipe' | 'scroll'>('grid');
     const [refreshTrigger, setRefreshTrigger] = useState(0);
     const [pullProgress, setPullProgress] = useState(0);
     const [isPulling, setIsPulling] = useState(false);
+    const [pendingSyncCount, setPendingSyncCount] = useState(0);
+
     const startY = useRef<number | null>(null);
     const PULL_THRESHOLD = 120;
 
     const [isDark, setIsDark] = useState(() => {
+        const saved = Storage.getSync(STORAGE_KEYS.THEME);
+        if (saved) return saved === 'dark';
         if (typeof window !== 'undefined') {
-            const saved = localStorage.getItem('theme');
-            if (saved) return saved === 'dark';
             return window.matchMedia('(prefers-color-scheme: dark)').matches;
         }
         return true;
     });
-    const navigate = useNavigate();
 
-    const [minDate, setMinDate] = useState<Date>(new Date());
-    const [isGuest, setIsGuest] = useState(false);
-    const [isLoadingAuth, setIsLoadingAuth] = useState(true);
-    const [showAuthModal, setShowAuthModal] = useState(false);
+    const minDate = userCreatedAt ? new Date(userCreatedAt) : new Date();
 
-    // Calendar persistence refs
-    const lastCalendarCloseTime = useRef<number>(0);
-    const lastCalendarViewDate = useRef<Date | null>(null);
-    const [calendarInitialDate, setCalendarInitialDate] = useState<Date | undefined>(undefined);
+    // --------------------------------------------------------------------------------
+    // SYNC & MUTATIONS
+    // --------------------------------------------------------------------------------
+    const deepSyncEntries = useCallback(async (uid: string) => {
+        if (!isOnline) return;
+        try {
+            const dates = Array.from({ length: 30 }, (_, i) => format(subDays(new Date(), i), 'yyyy-MM-dd'));
+            const { data: entries } = await supabase
+                .from('entries')
+                .select('id, date, content, media_items, updated_at')
+                .eq('user_id', uid)
+                .in('date', dates);
 
-    const handleOpenCalendar = () => {
-        const now = Date.now();
-        if (now - lastCalendarCloseTime.current < 5000 && lastCalendarViewDate.current) {
-            setCalendarInitialDate(lastCalendarViewDate.current);
-        } else {
-            setCalendarInitialDate(undefined);
+            if (entries) {
+                for (const entry of entries) {
+                    await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(uid, entry.date), entry);
+                }
+            }
+        } catch (e) {
+            console.error("[JournalPage] Deep sync failed", e);
         }
-        setShowCalendar(true);
-    };
+    }, [isOnline]);
 
-    const handleCloseCalendar = () => {
-        lastCalendarCloseTime.current = Date.now();
-        setShowCalendar(false);
-    };
+    // Handle background sync when coming online
+    useEffect(() => {
+        if (isOnline && userId) {
+            const flushQueue = async () => {
+                const result = await OfflineQueue.flush(userId);
+                if (result.success > 0) {
+                    setPendingSyncCount(await OfflineQueue.getPendingCount(userId));
+                }
+                refreshSettings();
+                deepSyncEntries(userId);
+            };
+            flushQueue();
+        }
+    }, [isOnline, userId, refreshSettings, deepSyncEntries]);
+
+    // Check queue count periodically
+    useEffect(() => {
+        if (userId) {
+            OfflineQueue.getPendingCount(userId).then(setPendingSyncCount);
+        }
+    }, [userId, refreshTrigger]);
 
     // Forced PIN Setup flow
     useEffect(() => {
@@ -88,156 +119,23 @@ export function JournalPage({
         }
     }, [initialPinSetupRequired]);
 
-    // Auth & Initial Data Fetch
-    useEffect(() => {
-        const initData = async () => {
-            const cachedUserRaw = localStorage.getItem('cached_user');
-            let cachedUser = cachedUserRaw ? JSON.parse(cachedUserRaw) : null;
-
-            try {
-                const { data: { session } } = await supabase.auth.getSession();
-                const user = session?.user || null;
-
-                if (user) {
-                    localStorage.setItem('cached_user', JSON.stringify({
-                        id: user.id,
-                        email: user.email,
-                        created_at: user.created_at
-                    }));
-                    cachedUser = user;
-                    setUserId(user.id);
-                } else if (!cachedUser) {
-                    setIsGuest(true);
-                    setIsLoadingAuth(false);
-                    return;
-                }
-            } catch (error) {
-                if (!cachedUser) {
-                    setIsGuest(true);
-                    setIsLoadingAuth(false);
-                    return;
-                }
-                setUserId(cachedUser.id);
-            }
-
-            if (cachedUser) {
-                // STEP 1: Load from cache first for instant UI
-                const cachedSettingsRaw = localStorage.getItem(`settings_cache_${cachedUser.id}`);
-                if (cachedSettingsRaw) {
-                    const cached = JSON.parse(cachedSettingsRaw);
-                    if (cached.ai_enabled !== undefined) setAiEnabled(cached.ai_enabled);
-                    if (cached.ai_rewrite_enabled !== undefined) setAiRewriteEnabled(cached.ai_rewrite_enabled);
-                    if (cached.accent_color) setAccentColor(cached.accent_color);
-                    if (cached.stt_language) setSttLanguage(cached.stt_language);
-                    if (cached.notifications_enabled !== undefined) setNotificationsEnabled(cached.notifications_enabled);
-                    if (cached.notification_time) setNotificationTime(cached.notification_time);
-                    if (cached.media_display_mode) setMediaDisplayMode(cached.media_display_mode as any);
-                }
-
-                const { data: settings } = await supabase
-                    .from('user_settings')
-                    .select('*')
-                    .eq('user_id', cachedUser.id)
-                    .single();
-
-                if (settings) {
-                    // Update cache and state with fresh data
-                    localStorage.setItem(`settings_cache_${cachedUser.id}`, JSON.stringify(settings));
-                    if (settings.ai_enabled !== undefined) setAiEnabled(settings.ai_enabled);
-                    if (settings.ai_rewrite_enabled !== undefined) setAiRewriteEnabled(settings.ai_rewrite_enabled);
-                    if (settings.accent_color) setAccentColor(settings.accent_color);
-                    if (settings.stt_language) setSttLanguage(settings.stt_language);
-                    if (settings.notifications_enabled !== undefined) setNotificationsEnabled(settings.notifications_enabled);
-                    if (settings.notification_time) setNotificationTime(settings.notification_time);
-                    if (settings.media_display_mode) setMediaDisplayMode(settings.media_display_mode as any);
-                }
-
-                if (cachedUser.created_at) setMinDate(new Date(cachedUser.created_at));
-
-                // STEP 2: Trigger Deep Sync for offline history (last 30 days)
-                deepSyncEntries(cachedUser.id);
-            }
-            setIsLoadingAuth(false);
-        };
-
-        const deepSyncEntries = async (uid: string) => {
-            if (!navigator.onLine) return;
-
-            try {
-                const dates = Array.from({ length: 30 }, (_, i) => format(subDays(new Date(), i), 'yyyy-MM-dd'));
-
-                const { data: entries } = await supabase
-                    .from('entries')
-                    .select('id, date, content, media_items, updated_at')
-                    .eq('user_id', uid)
-                    .in('date', dates);
-
-                if (entries) {
-                    entries.forEach(entry => {
-                        const cacheKey = `entry_cache_${uid}_${entry.date}`;
-                        localStorage.setItem(cacheKey, JSON.stringify(entry));
-                    });
-                }
-            } catch (e) {
-                console.error("Deep sync failed", e);
-            }
-        };
-
-        initData();
-    }, [navigate]);
-
-    // Theme Toggle
+    // --------------------------------------------------------------------------------
+    // THEME & UX
+    // --------------------------------------------------------------------------------
     useEffect(() => {
         const root = window.document.documentElement;
-        if (isDark) {
-            root.classList.add('dark');
-            localStorage.setItem('theme', 'dark');
-        } else {
-            root.classList.remove('dark');
-            localStorage.setItem('theme', 'light');
+        root.classList.toggle('dark', isDark);
+        Storage.set(STORAGE_KEYS.THEME, isDark ? 'dark' : 'light');
+        if (userId) {
+            updateSetting('theme' as any, isDark ? 'dark' : 'light');
         }
+    }, [isDark, userId, updateSetting]);
 
-        supabase.auth.getUser().then(({ data: { user } }) => {
-            if (user) {
-                supabase.from('user_settings').upsert({
-                    user_id: user.id,
-                    theme: isDark ? 'dark' : 'light',
-                    updated_at: new Date().toISOString()
-                }).then(() => { });
-            }
-        });
-    }, [isDark]);
-
-    const updateSetting = async (key: string, value: any) => {
-        if (!userId) return;
-        const { error } = await supabase
-            .from('user_settings')
-            .upsert({
-                user_id: userId,
-                [key]: value,
-                updated_at: new Date().toISOString()
-            });
-        if (error) console.error(`Error updating ${key}:`, error);
-    };
-
-    const toggleAi = async (enabled: boolean) => {
-        setAiEnabled(enabled);
-        updateSetting('ai_enabled', enabled);
-    };
-
-    const toggleAiRewrite = async (enabled: boolean) => {
-        setAiRewriteEnabled(enabled);
-        updateSetting('ai_rewrite_enabled', enabled);
-    };
-
-    const updateAccentColor = (colorClass: string) => {
-        setAccentColor(colorClass);
-        updateSetting('accent_color', colorClass);
-    };
-
-    const updateMediaDisplayMode = (mode: 'grid' | 'swipe' | 'scroll') => {
-        setMediaDisplayMode(mode);
-        updateSetting('media_display_mode', mode);
+    // Standard vibration fallback
+    const triggerHaptic = (pattern: number = 10) => {
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+            navigator.vibrate(pattern);
+        }
     };
 
     const scheduleNotifications = async (enabled: boolean, timeStr?: string) => {
@@ -246,7 +144,7 @@ export function JournalPage({
             await LocalNotifications.cancel({ notifications: [{ id: 1 }] });
 
             if (enabled) {
-                const targetTime = timeStr || notificationTime;
+                const targetTime = timeStr || settings.notification_time;
                 const [hour, minute] = targetTime.split(':').map(Number);
                 const permission = await LocalNotifications.requestPermissions();
                 if (permission.display === 'granted') {
@@ -268,6 +166,31 @@ export function JournalPage({
         }
     };
 
+    // --------------------------------------------------------------------------------
+    // CALENDAR PERSISTENCE
+    // --------------------------------------------------------------------------------
+    const lastCalendarCloseTime = useRef<number>(0);
+    const lastCalendarViewDate = useRef<Date | null>(null);
+    const [calendarInitialDate, setCalendarInitialDate] = useState<Date | undefined>(undefined);
+
+    const handleOpenCalendar = () => {
+        const now = Date.now();
+        if (now - lastCalendarCloseTime.current < 5000 && lastCalendarViewDate.current) {
+            setCalendarInitialDate(lastCalendarViewDate.current);
+        } else {
+            setCalendarInitialDate(undefined);
+        }
+        setShowCalendar(true);
+    };
+
+    const handleCloseCalendar = () => {
+        lastCalendarCloseTime.current = Date.now();
+        setShowCalendar(false);
+    };
+
+    // --------------------------------------------------------------------------------
+    // PULL-TO-REFRESH
+    // --------------------------------------------------------------------------------
     const handleTouchStart = (e: React.TouchEvent) => {
         if (window.scrollY === 0) {
             startY.current = e.touches[0].clientY;
@@ -291,27 +214,45 @@ export function JournalPage({
     };
 
     const handleTouchEnd = () => {
-        if (pullProgress > PULL_THRESHOLD) triggerRefresh();
+        if (pullProgress > PULL_THRESHOLD) {
+            setRefreshTrigger(prev => prev + 1);
+            triggerHaptic(15);
+            if (isOnline && userId) {
+                refreshSettings();
+                deepSyncEntries(userId);
+            }
+        }
         setPullProgress(0);
         setIsPulling(false);
         startY.current = null;
     };
 
-    const triggerRefresh = () => {
-        setRefreshTrigger(prev => prev + 1);
-        if (typeof window !== 'undefined' && navigator.vibrate) navigator.vibrate(10);
-    };
-
+    // --------------------------------------------------------------------------------
+    // RENDER
+    // --------------------------------------------------------------------------------
     if (isLoadingAuth) {
         return (
             <div className="min-h-screen bg-zinc-50 dark:bg-[#09090b] flex items-center justify-center">
-                <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-900 dark:border-zinc-700 dark:border-t-white rounded-full animate-spin"></div>
+                <div className="w-6 h-6 border-2 border-zinc-300 border-t-zinc-900 dark:border-zinc-700 dark:border-t-white rounded-full animate-spin" />
             </div>
         );
     }
 
     return (
         <div className="flex min-h-screen flex-col items-center w-full font-sans animate-in fade-in duration-700">
+            {/* Offline/Sync Banner */}
+            {!isOnline && (
+                <div className="fixed top-0 left-0 right-0 z-[60] bg-amber-500/90 backdrop-blur-md text-white py-2 text-xs font-medium flex items-center justify-center gap-2 shadow-lg">
+                    <WifiOff className="w-3.5 h-3.5" />
+                    <span>Working Offline</span>
+                    {pendingSyncCount > 0 && (
+                        <span className="bg-white/20 px-2 py-0.5 rounded-full">
+                            {pendingSyncCount} changes to sync
+                        </span>
+                    )}
+                </div>
+            )}
+
             <Header
                 onOpenCalendar={handleOpenCalendar}
                 onOpenSettings={() => {
@@ -324,16 +265,17 @@ export function JournalPage({
                 onOpenTimeline={() => setShowTimeline(true)}
                 isDark={isDark}
                 toggleTheme={() => setIsDark(!isDark)}
-                accentColor={accentColor}
+                accentColor={settings.accent_color}
             />
 
             <div
-                className="flex-1 w-full relative"
+                className={cn("flex-1 w-full relative", !isOnline && "mt-8")}
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
+                style={{ overscrollBehaviorY: 'contain' }}
             >
-                {/* Pull to Refresh Indicator */}
+                {/* Pull-to-refresh Indicator */}
                 <div
                     className="absolute top-0 left-0 right-0 flex justify-center pointer-events-none z-40 overflow-hidden transition-all duration-300"
                     style={{
@@ -349,7 +291,10 @@ export function JournalPage({
                             "w-6 h-6 border-2 border-zinc-300 dark:border-zinc-700 rounded-full flex items-center justify-center",
                             pullProgress > PULL_THRESHOLD && "border-t-transparent animate-spin"
                         )}>
-                            <div className={cn("w-1.5 h-1.5 rounded-full", pullProgress > PULL_THRESHOLD ? "hidden" : accentColor)} />
+                            <div className={cn(
+                                "w-1.5 h-1.5 rounded-full",
+                                pullProgress > PULL_THRESHOLD ? "hidden" : settings.accent_color
+                            )} />
                         </div>
                     </div>
                 </div>
@@ -359,18 +304,22 @@ export function JournalPage({
                     date={selectedDate}
                     onDateChange={setSelectedDate}
                     minDate={minDate}
-                    accentColor={accentColor}
+                    accentColor={settings.accent_color}
                     isGuest={isGuest}
                     onGuestAction={() => setShowAuthModal(true)}
                     refreshTrigger={refreshTrigger}
-                    sttLanguage={sttLanguage}
-                    aiRewriteEnabled={aiRewriteEnabled}
-                    mediaDisplayMode={mediaDisplayMode}
+                    sttLanguage={settings.stt_language}
+                    aiRewriteEnabled={settings.ai_rewrite_enabled}
+                    mediaDisplayMode={settings.media_display_mode}
                 />
 
-                {aiEnabled && (
+                {settings.ai_enabled && (
                     <div className="w-full px-4 pb-12">
-                        <WeeklyReflection accentColor={accentColor} key={`reflection-${refreshTrigger}`} date={selectedDate} />
+                        <WeeklyReflection
+                            accentColor={settings.accent_color}
+                            key={`reflection-${refreshTrigger}`}
+                            date={selectedDate}
+                        />
                     </div>
                 )}
             </div>
@@ -385,8 +334,8 @@ export function JournalPage({
                 }}
                 minDate={minDate}
                 initialViewDate={calendarInitialDate}
-                onMonthChange={(date) => lastCalendarViewDate.current = date}
-                accentColor={accentColor}
+                onMonthChange={(date) => { lastCalendarViewDate.current = date; }}
+                accentColor={settings.accent_color}
                 userId={userId}
             />
 
@@ -396,41 +345,34 @@ export function JournalPage({
                     setShowSettings(false);
                     if (initialPinSetupRequired) onPinSetupComplete?.();
                 }}
-                aiEnabled={aiEnabled}
-                onToggleAi={toggleAi}
-                aiRewriteEnabled={aiRewriteEnabled}
-                onToggleAiRewrite={toggleAiRewrite}
-                accentColor={accentColor}
-                onAccentChange={updateAccentColor}
-                sttLanguage={sttLanguage}
-                onLanguageChange={(lang: string) => {
-                    setSttLanguage(lang);
-                    updateSetting('stt_language', lang);
-                }}
+                aiEnabled={settings.ai_enabled}
+                onToggleAi={(v) => updateSetting('ai_enabled', v)}
+                aiRewriteEnabled={settings.ai_rewrite_enabled}
+                onToggleAiRewrite={(v) => updateSetting('ai_rewrite_enabled', v)}
+                accentColor={settings.accent_color}
+                onAccentChange={(v) => updateSetting('accent_color', v)}
+                sttLanguage={settings.stt_language}
+                onLanguageChange={(v) => updateSetting('stt_language', v)}
                 lockEnabled={externalLockEnabled}
-                onToggleLock={(enabled) => {
-                    onLockToggle?.(enabled);
-                    updateSetting('lock_enabled', enabled);
+                onToggleLock={(v) => {
+                    onLockToggle?.(v);
+                    updateSetting('lock_enabled', v);
                 }}
-                notificationsEnabled={notificationsEnabled}
-                onToggleNotifications={(enabled) => {
-                    setNotificationsEnabled(enabled);
-                    updateSetting('notifications_enabled', enabled);
-                    scheduleNotifications(enabled);
+                notificationsEnabled={settings.notifications_enabled}
+                onToggleNotifications={(v) => {
+                    updateSetting('notifications_enabled', v);
+                    scheduleNotifications(v);
                 }}
-                notificationTime={notificationTime}
-                onTimeChange={(time) => {
-                    setNotificationTime(time);
-                    updateSetting('notification_time', time);
-                    if (notificationsEnabled) scheduleNotifications(true, time);
+                notificationTime={settings.notification_time}
+                onTimeChange={(v) => {
+                    updateSetting('notification_time', v);
+                    if (settings.notifications_enabled) scheduleNotifications(true, v);
                 }}
                 pinCode={externalPinCode}
-                onPinChange={(val) => {
-                    onPinChange?.(val);
-                }}
+                onPinChange={onPinChange}
                 isForcedSetup={initialPinSetupRequired}
-                mediaDisplayMode={mediaDisplayMode}
-                onMediaDisplayModeChange={updateMediaDisplayMode}
+                mediaDisplayMode={settings.media_display_mode}
+                onMediaDisplayModeChange={(v) => updateSetting('media_display_mode', v)}
             />
 
             {userId && (
@@ -440,7 +382,7 @@ export function JournalPage({
                     onDateSelect={setSelectedDate}
                     onClose={() => setShowTimeline(false)}
                     isOpen={showTimeline}
-                    accentColor={accentColor}
+                    accentColor={settings.accent_color}
                 />
             )}
 

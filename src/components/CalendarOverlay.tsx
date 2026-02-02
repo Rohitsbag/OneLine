@@ -37,20 +37,56 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
             const monthStart = startOfMonth(viewDate);
             const monthEnd = endOfMonth(viewDate);
 
-            const { data, error } = await supabase
-                .from('entries')
-                .select('date, content')
-                .eq('user_id', userId)
-                .gte('date', format(monthStart, 'yyyy-MM-dd'))
-                .lte('date', format(monthEnd, 'yyyy-MM-dd'))
-                .not('content', 'is', null);
+            // OFFLINE-FIRST: Load from localStorage cache first
+            const cachedDates = new Set<string>();
+            try {
+                // Scan localStorage for cached entries in this month's range
+                const monthDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
+                monthDays.forEach(day => {
+                    const dateStr = format(day, 'yyyy-MM-dd');
+                    const cacheKey = `entry_cache_${userId}_${dateStr}`;
+                    const cached = localStorage.getItem(cacheKey);
+                    if (cached) {
+                        try {
+                            const entry = JSON.parse(cached);
+                            if (entry.content && entry.content.trim().length > 0) {
+                                cachedDates.add(dateStr);
+                            }
+                        } catch (e) {
+                            // Ignore corrupted cache
+                        }
+                    }
+                });
+                // Set cached dates immediately for instant UI
+                if (cachedDates.size > 0) {
+                    setEntryDates(new Set(cachedDates));
+                }
+            } catch (e) {
+                console.error("Error loading cached dates:", e);
+            }
 
-            if (!error && data) {
-                // Only include entries with non-empty content (after trimming whitespace)
-                const datesWithContent = data
-                    .filter(e => e.content && e.content.trim().length > 0)
-                    .map(e => e.date);
-                setEntryDates(new Set(datesWithContent));
+            // Then try to fetch from Supabase (if online)
+            if (!navigator.onLine) return; // Skip network call if offline
+
+            try {
+                const { data, error } = await supabase
+                    .from('entries')
+                    .select('date, content')
+                    .eq('user_id', userId)
+                    .gte('date', format(monthStart, 'yyyy-MM-dd'))
+                    .lte('date', format(monthEnd, 'yyyy-MM-dd'))
+                    .not('content', 'is', null);
+
+                if (!error && data) {
+                    // Only include entries with non-empty content (after trimming whitespace)
+                    const datesWithContent = data
+                        .filter(e => e.content && e.content.trim().length > 0)
+                        .map(e => e.date);
+                    setEntryDates(new Set(datesWithContent));
+                }
+            } catch (e) {
+                // Network error - keep using cached dates
+                console.log("Calendar: Using cached dates (offline)");
             }
         };
 

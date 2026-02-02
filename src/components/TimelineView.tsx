@@ -78,29 +78,83 @@ export function TimelineView({ userId, currentDate, onDateSelect, onClose, isOpe
             setOffset(0);
             setHasMore(true);
 
-            let query = supabase
-                .from('entries')
-                .select('date, content, image_url, audio_url')
-                .eq('user_id', userId);
-
-            // Add search filter if query exists
-            if (debouncedQuery.trim()) {
-                query = query.ilike('content', `%${debouncedQuery.trim()}%`);
+            // OFFLINE-FIRST: Load from localStorage cache first
+            const cachedEntries: TimelineEntry[] = [];
+            try {
+                // Scan localStorage for entries (look for last 3 months of cache)
+                const today = new Date();
+                for (let i = 0; i < 90; i++) {
+                    const date = new Date(today);
+                    date.setDate(date.getDate() - i);
+                    const dateStr = format(date, 'yyyy-MM-dd');
+                    const cacheKey = `entry_cache_${userId}_${dateStr}`;
+                    const cached = localStorage.getItem(cacheKey);
+                    if (cached) {
+                        try {
+                            const entry = JSON.parse(cached);
+                            if (entry.content && entry.content.trim()) {
+                                // Apply search filter if present
+                                if (!debouncedQuery.trim() ||
+                                    entry.content.toLowerCase().includes(debouncedQuery.trim().toLowerCase())) {
+                                    cachedEntries.push({
+                                        date: entry.date || dateStr,
+                                        content: entry.content,
+                                        hasImage: entry.media_items?.some((m: any) => m.type === 'image') || false,
+                                        hasAudio: entry.media_items?.some((m: any) => m.type === 'audio') || false
+                                    });
+                                }
+                            }
+                        } catch (e) {
+                            // Ignore corrupted cache
+                        }
+                    }
+                }
+                // Sort by date descending
+                cachedEntries.sort((a, b) => b.date.localeCompare(a.date));
+                // Set cached entries immediately for instant UI
+                if (cachedEntries.length > 0) {
+                    setEntries(cachedEntries.slice(0, PAGE_SIZE));
+                    setHasMore(cachedEntries.length > PAGE_SIZE);
+                    setOffset(PAGE_SIZE);
+                }
+            } catch (e) {
+                console.error("Error loading cached timeline:", e);
             }
 
-            const { data, error } = await query
-                .order('date', { ascending: false })
-                .range(0, PAGE_SIZE - 1);
+            // Then try to fetch from Supabase (if online)
+            if (!navigator.onLine) {
+                setIsLoading(false);
+                return; // Skip network call if offline
+            }
 
-            if (!error && data) {
-                setEntries(data.map(e => ({
-                    date: e.date,
-                    content: e.content,
-                    hasImage: !!e.image_url,
-                    hasAudio: !!e.audio_url
-                })));
-                setHasMore(data.length === PAGE_SIZE);
-                setOffset(PAGE_SIZE);
+            try {
+                let query = supabase
+                    .from('entries')
+                    .select('date, content, image_url, audio_url')
+                    .eq('user_id', userId);
+
+                // Add search filter if query exists
+                if (debouncedQuery.trim()) {
+                    query = query.ilike('content', `%${debouncedQuery.trim()}%`);
+                }
+
+                const { data, error } = await query
+                    .order('date', { ascending: false })
+                    .range(0, PAGE_SIZE - 1);
+
+                if (!error && data) {
+                    setEntries(data.map(e => ({
+                        date: e.date,
+                        content: e.content,
+                        hasImage: !!e.image_url,
+                        hasAudio: !!e.audio_url
+                    })));
+                    setHasMore(data.length === PAGE_SIZE);
+                    setOffset(PAGE_SIZE);
+                }
+            } catch (e) {
+                // Network error - keep using cached entries
+                console.log("Timeline: Using cached entries (offline)");
             }
             setIsLoading(false);
         };

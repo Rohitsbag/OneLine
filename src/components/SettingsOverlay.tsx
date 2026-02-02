@@ -65,8 +65,30 @@ export function SettingsOverlay({
 
     useEffect(() => {
         if (isOpen) {
+            // OFFLINE-FIRST: Helper to read email from cached user
+            const getEmailFromCache = (): string => {
+                try {
+                    const cached = localStorage.getItem('cached_user');
+                    if (cached) {
+                        const parsed = JSON.parse(cached);
+                        return parsed.email || "User";
+                    }
+                } catch {
+                    // Corrupted cache - ignore
+                }
+                return "User";
+            };
+
             supabase.auth.getUser().then(({ data }) => {
-                setEmail(data.user?.email || "User");
+                if (data.user?.email) {
+                    setEmail(data.user.email);
+                } else {
+                    // No user from Supabase (offline) - read from cache
+                    setEmail(getEmailFromCache());
+                }
+            }).catch(() => {
+                // Network error - read from cache
+                setEmail(getEmailFromCache());
             });
         }
     }, [isOpen]);

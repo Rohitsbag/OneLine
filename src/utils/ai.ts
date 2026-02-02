@@ -1,23 +1,15 @@
 /**
- * AI Service - Calls Groq API through Vercel Serverless Function
- * API key kept secure on server side
+ * AI Service - Direct Integrations for Robustness
+ * OCR: Tesseract.js (On-device/Local)
+ * STT: Groq / Whisper (Fastest API)
  */
-import { supabase } from "@/utils/supabase/client";
 import { startOfWeek, endOfWeek, format } from 'date-fns';
-import { STT_LANGUAGES } from "@/constants/languages";
+import { supabase } from "@/utils/supabase/client";
 
 // Use full URL for Android APK compatibility (relative URLs don't work in Capacitor)
 const AI_PROXY_URL = `https://get-one-line.vercel.app/api/ai-proxy`;
 
-interface ChatRequest {
-    action: "chat";
-    model?: string;
-    messages: Array<{ role: string; content: string | Array<any> }>;
-    temperature?: number;
-    max_tokens?: number;
-}
-
-async function callAIProxy(body: ChatRequest, signal?: AbortSignal): Promise<string> {
+async function callAIProxy(body: any, signal?: AbortSignal): Promise<string> {
     // Simple fetch to Vercel API route - no auth needed, key is server-side
     const response = await fetch(AI_PROXY_URL, {
         method: "POST",
@@ -38,229 +30,105 @@ async function callAIProxy(body: ChatRequest, signal?: AbortSignal): Promise<str
     return data.text || "";
 }
 
-// Maximum base64 size before compression (Edge Function accepts 4MB, we use 3.5MB for safety)
-const MAX_BASE64_SIZE = 3.5 * 1024 * 1024; // 3.5MB (leaves room for overhead)
+// Old implementation removed in favor of replacement below
 
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
+const GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
+
+/**
+ * Perform OCR using Tesseract.js (Strictly Local)
+ */
 export async function performOCR(imageFile: File, language: string = "English"): Promise<string> {
     try {
-        let fileToProcess = imageFile;
+        console.log(`[OCR] Starting Tesseract.js for ${imageFile.name}...`);
 
-        // PRE-FLIGHT: Initial Size Check & Auto-Compression
-        // We estimate base64 size (size * 1.33). If > 3.5MB, we compress.
-        if (fileToProcess.size * 1.35 > MAX_BASE64_SIZE) {
-            console.log("Image large. Compressing for Edge Function...");
-            const { compressImage } = await import("./image");
-            // Target 2.5MB to stay under 3.5MB base64 with room
-            const compressedBlob = await compressImage(fileToProcess, 3000, 2500);
-            fileToProcess = new File([compressedBlob], imageFile.name, { type: 'image/jpeg' });
-        }
+        // 1. Import Tesseract dynamically
+        const Tesseract = await import('tesseract.js');
 
-        // Convert image to base64
-        const base64Image = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(fileToProcess);
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = error => reject(error);
+        // 2. Map language to Tesseract code
+        const langMap: Record<string, string> = {
+            'English': 'eng',
+            'Hindi': 'hin',
+            'Spanish': 'spa',
+            'French': 'fra',
+            'German': 'deu',
+            'Chinese': 'chi_sim',
+            'Japanese': 'jpn'
+        };
+        const langCode = langMap[language] || 'eng';
+
+        // 3. Run recognition
+        const { data: { text } } = await Tesseract.recognize(imageFile, langCode, {
+            logger: (m) => console.log(`[OCR Progress]`, m)
         });
 
-        // FINAL SAFETY GUARD: If somehow still too big, brute-force compress again
-        if (base64Image.length > MAX_BASE64_SIZE) {
-            console.warn("Still too large after compression. Applying emergency downscale.");
-            const { compressImage } = await import("./image");
-            // Aggressive: 1024px, 400KB target
-            const emergencyBlob = await compressImage(fileToProcess, 1024, 400);
-            const emergencyFile = new File([emergencyBlob], imageFile.name, { type: 'image/jpeg' });
-
-            // Re-convert
-            const emergencyBase64 = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.readAsDataURL(emergencyFile);
-                reader.onload = () => resolve(reader.result as string);
-                reader.onerror = error => reject(error);
-            });
-
-            // If THIS fails, we really can't send it. But we tried everything.
-            if (emergencyBase64.length > MAX_BASE64_SIZE) {
-                throw new Error("Image could not be compressed enough to send. Please try a different image.");
-            }
-
-            // Proceed with emergency version
-            return await executeOCRCall(emergencyBase64, language);
+        if (!text || text.trim().length === 0) {
+            return "No text detected.";
         }
 
-        return await executeOCRCall(base64Image, language);
+        return text.trim();
 
     } catch (error: any) {
         console.error("OCR Error:", error);
-        if (error.name === 'AbortError' || error.message === "OCR Request Timed Out") {
-            throw new Error("OCR is taking too long. Please try again with a better connection.");
-        }
-        throw new Error(error instanceof Error ? error.message : "Failed to extract text from image");
+        throw new Error("Text recognition failed. Please try a clearer image.");
     }
 }
 
-// Extracted inner logic for clean execution after compression handling
-async function executeOCRCall(base64Image: string, language: string = "English"): Promise<string> {
-    // TIMEOUT: 45 seconds strict timeout for the entire operation
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45000);
-
-    // Helper for calling OCR with specific model
-    const callOCRModel = (model: string) => callAIProxy({
-        action: "chat",
-        model: model,
-        messages: [
-            {
-                role: "user",
-                content: [
-                    {
-                        type: "text",
-                        text: `Task: Extract all readable text from the provided image.
-
-Requirements:
-- Preserve original formatting exactly (line breaks, spacing, paragraph structure).
-- Maintain reading order (top-to-bottom, left-to-right).
-- Include all visible text: headings, body text, captions, footnotes, labels, numbers, symbols.
-- Do not summarize, interpret, correct, or rewrite the text.
-- Do not add explanations, comments, or metadata.
-- If text is partially unclear, transcribe it as-is to the best possible accuracy.
-- If no text is present, return an empty response.
-
-Output Rules:
-- Return ONLY the extracted text.
-- No prefixes, no quotes, no markdown, no conversational filler.`
-                    },
-                    { type: "image_url", image_url: { url: base64Image } }
-                ]
-            }
-        ],
-        temperature: 0.1,
-        max_tokens: 1000
-    }, controller.signal);
-
-    const runTesseract = async () => {
-        try {
-            const Tesseract = await import('tesseract.js');
-            const blob = await fetch(base64Image).then(r => r.blob());
-
-            // Map common names to Tesseract codes
-            const langMap: Record<string, string> = {
-                'English': 'eng',
-                'Hindi': 'hin',
-                'Spanish': 'spa',
-                'French': 'fra',
-                'German': 'deu',
-                'Chinese': 'chi_sim',
-                'Japanese': 'jpn'
-            };
-            const tesLang = langMap[language] || 'eng';
-
-            const { data: { text } } = await Tesseract.recognize(blob, tesLang, {
-                logger: () => { }
-            });
-            return text || "No text detected in image.";
-        } catch (e) {
-            console.error("Tesseract failed:", e);
-            return "OCR failed offline. Please try again online.";
-        }
-    };
-
-    if (!navigator.onLine) {
-        return await runTesseract();
-    }
-
-    try {
-        // TIER 1: Maverick (Primary)
-        return await callOCRModel("meta-llama/llama-4-maverick-17b-128e-instruct");
-    } catch (mainError: any) {
-        if (mainError.name === 'AbortError') throw new Error("OCR Request Timed Out");
-        console.warn("Main OCR model failed, trying fallback...", mainError);
-
-        try {
-            // TIER 2: Scout (Faster/Standard)
-            return await callOCRModel("meta-llama/llama-4-scout-17b-16e-instruct");
-        } catch (scoutError: any) {
-            console.warn("Scout OCR failed, using Tesseract fallback...", scoutError);
-            return await runTesseract();
-        }
-    } finally {
-        clearTimeout(timeoutId);
-    }
-}
-
+/**
+ * Transcribe Audio using Groq API (Whisper Large V3)
+ * Significantly faster than standard Whisper.
+ */
 export async function transcribeAudio(audioBlob: Blob, model: string, language: string = "Auto"): Promise<string> {
+    if (!GROQ_API_KEY) {
+        throw new Error("Missing Groq API Key. Please update settings.");
+    }
+
     try {
-        // Convert blob to base64
-        const base64Audio = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(audioBlob);
-            reader.onload = () => {
-                const base64 = reader.result as string;
-                // Remove data URL prefix (e.g., "data:audio/webm;base64,")
-                resolve(base64.split(',')[1]);
-            };
-            reader.onerror = error => reject(error);
+        console.log(`[STT] Starting Groq transcription (${audioBlob.size} bytes)...`);
+
+        // 1. Prepare FormData
+        const formData = new FormData();
+        // Groq requires a filename with an audio extension
+        const ext = audioBlob.type.includes('ogg') ? 'ogg' : 'webm';
+        const file = new File([audioBlob], `recording.${ext}`, { type: audioBlob.type });
+
+        formData.append("file", file);
+        formData.append("model", "whisper-large-v3");
+
+        // Optional: Language hint (Groq supports ISO codes)
+        if (language && language !== "Auto" && language !== "Hinglish") {
+            // Simple map for common checks
+            const code = language.toLowerCase().slice(0, 2);
+            formData.append("language", code);
+        }
+
+        // Optional: Prompt for context (e.g. Hinglish)
+        if (language === "Hinglish") {
+            formData.append("prompt", "Transcribe this audio which may contain a mix of English and Hindi.");
+        }
+
+        // 2. Call API
+        const response = await fetch(GROQ_API_URL, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${GROQ_API_KEY}`,
+                // Content-Type is set automatically by fetch for FormData
+            },
+            body: formData
         });
 
-        // Customize prompt based on language
-        let systemPrompt = "You are a highly accurate speech-to-text service. Transcribe the audio exactly as spoken.";
-        if (language === "Hindi") {
-            systemPrompt = "Transcribe the audio and translate it into pure Hindi. If it is already Hindi, just transcribe it. Use Devanagari script.";
-        } else if (language === "Hinglish") {
-            systemPrompt = "Transcribe the audio as Hinglish (mixture of Hindi and English) as spoken by many young Indians. Use Roman script, but reflect Hindi words correctly.";
-        } else if (language === "English") {
-            systemPrompt = "Transcribe the audio into pure English. If the speaker is speaking Hindi, translate it to English.";
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: { message: response.statusText } }));
+            console.error("[STT] Groq API Error:", err);
+            throw new Error(err.error?.message || `Groq API Failed: ${response.status}`);
         }
 
-        // Map language to ISO code for Whisper
-        const langObj = STT_LANGUAGES.find(l => l.name === language || l.code === language);
-        const langCode = (langObj && langObj.code !== "auto" && langObj.code !== "hinglish") ? langObj.code : "";
-        // Hinglish/Auto don't send a specific language code to model but use prompt
-
-        // TIMEOUT: 45 seconds strict timeout for transcription
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 45000);
-
-        // Determine action: English selection uses 'translate' endpoint for best results
-        const isEnglish = language === "English";
-        const action = isEnglish ? "translate" : "transcribe";
-
-        try {
-            // Simple fetch to Vercel API route - no auth needed
-            const response = await fetch(AI_PROXY_URL, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    action: action,
-                    audio: base64Audio,
-                    model: model,
-                    prompt: systemPrompt,
-                    language: isEnglish ? undefined : (langCode || undefined)
-                }),
-                signal: controller.signal
-            });
-
-            if (!response.ok) {
-                const error = await response.json().catch(() => ({ error: response.statusText }));
-                console.error("Transcription Error:", error);
-                throw new Error(error.error || "Transcription failed");
-            }
-
-            const data = await response.json();
-            return data.text || "";
-
-        } finally {
-            clearTimeout(timeoutId);
-        }
+        const data = await response.json();
+        return data.text || "";
 
     } catch (error: any) {
-        console.error("Transcription Error:", error);
-        if (error.name === 'AbortError') {
-            throw new Error("Transcription timed out. Please try a shorter recording.");
-        }
-        throw error;
+        console.error("[STT] Transcription Error:", error);
+        throw new Error("Transcription failed. Please check your internet connection.");
     }
 }
 

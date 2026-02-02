@@ -5,6 +5,19 @@ import { Capacitor } from '@capacitor/core';
 export const isNative = () => Capacitor.isNativePlatform();
 
 /**
+ * Base64 to Blob conversion helper
+ */
+export function base64ToBlob(base64: string, mimeType: string): Blob {
+    const byteCharacters = atob(base64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    return new Blob([byteArray], { type: mimeType });
+}
+
+/**
  * Capture or pick a photo using native UI
  */
 export async function getPhoto(source: 'CAMERA' | 'GALLERY'): Promise<{ blob: Blob; url: string } | null> {
@@ -19,12 +32,7 @@ export async function getPhoto(source: 'CAMERA' | 'GALLERY'): Promise<{ blob: Bl
         });
 
         if (image.base64String) {
-            const rawData = atob(image.base64String);
-            const bytes = new Uint8Array(rawData.length);
-            for (let i = 0; i < rawData.length; i++) {
-                bytes[i] = rawData.charCodeAt(i);
-            }
-            const blob = new Blob([bytes], { type: `image/${image.format}` });
+            const blob = base64ToBlob(image.base64String, `image/${image.format}`);
             const url = URL.createObjectURL(blob);
             return { blob, url };
         }
@@ -36,37 +44,33 @@ export async function getPhoto(source: 'CAMERA' | 'GALLERY'): Promise<{ blob: Bl
 }
 
 /**
- * Pick a video using native UI
+ * Capture or pick a video using native UI
  */
-export async function getVideo(): Promise<{ blob: Blob; url: string; format: string } | null> {
+export async function getVideo(source: 'CAMERA' | 'GALLERY' = 'GALLERY'): Promise<{ blob: Blob; url: string; format: string } | null> {
     if (!isNative()) return null;
 
     try {
-        const video = await Camera.getPhoto({
-            quality: 90,
+        const result = await Camera.getPhoto({
+            quality: 80,
             allowEditing: false,
             resultType: CameraResultType.Base64,
-            source: CameraSource.Photos,
-            // @ts-ignore - plugin support for video varies
-            promptLabelHeader: 'Pick a Video',
-            // @ts-ignore
-            types: ['video']
+            source: source === 'CAMERA' ? CameraSource.Camera : CameraSource.Photos,
+            direction: 'REAR',
+            presentationStyle: 'fullscreen',
+            mediaType: 'VIDEO' // Critical for video mode
         });
 
-        if (video.base64String) {
-            const rawData = atob(video.base64String);
-            const bytes = new Uint8Array(rawData.length);
-            for (let i = 0; i < rawData.length; i++) {
-                bytes[i] = rawData.charCodeAt(i);
-            }
-            const format = video.format || 'mp4';
-            const blob = new Blob([bytes], { type: `video/${format}` });
+        if (result.base64String) {
+            const format = result.format || 'mp4';
+            const blob = base64ToBlob(result.base64String, `video/${format}`);
             const url = URL.createObjectURL(blob);
             return { blob, url, format };
         }
         return null;
     } catch (e) {
-        console.error('Native video capture failed:', e);
+        if ((e as any).message !== 'User cancelled photos app') {
+            console.error('Native video capture failed:', e);
+        }
         return null;
     }
 }
@@ -89,18 +93,16 @@ export const nativeVoice = {
         }
     },
 
-    async stop(): Promise<{ blob: Blob; mimeType: string } | null> {
+    async stop(): Promise<{ blob: Blob; mimeType: string; duration: number } | null> {
         if (!isNative()) return null;
         const result = await VoiceRecorder.stopRecording();
         if (result.value && result.value.recordDataBase64) {
-            const rawData = atob(result.value.recordDataBase64);
-            const bytes = new Uint8Array(rawData.length);
-            for (let i = 0; i < rawData.length; i++) {
-                bytes[i] = rawData.charCodeAt(i);
-            }
-            const mimeType = result.value.mimeType;
-            const blob = new Blob([bytes], { type: mimeType });
-            return { blob, mimeType };
+            const blob = base64ToBlob(result.value.recordDataBase64, result.value.mimeType);
+            return {
+                blob,
+                mimeType: result.value.mimeType,
+                duration: Math.round(result.value.msDuration / 1000)
+            };
         }
         return null;
     }
