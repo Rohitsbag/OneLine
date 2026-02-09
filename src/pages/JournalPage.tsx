@@ -18,23 +18,7 @@ import { useSettings } from "@/hooks/useSettings";
 import { OfflineQueue } from "@/utils/offlineQueue";
 import { WifiOff } from "lucide-react";
 
-interface JournalPageProps {
-    externalPinCode?: string | null;
-    externalLockEnabled?: boolean;
-    onPinChange?: (pin: string | null) => void;
-    onLockToggle?: (enabled: boolean) => void;
-    initialPinSetupRequired?: boolean;
-    onPinSetupComplete?: () => void;
-}
-
-export function JournalPage({
-    externalPinCode,
-    externalLockEnabled,
-    onPinChange,
-    onLockToggle,
-    initialPinSetupRequired,
-    onPinSetupComplete
-}: JournalPageProps) {
+export function JournalPage() {
     // --------------------------------------------------------------------------------
     // INFRASTRUCTURE & SHARED STATE
     // --------------------------------------------------------------------------------
@@ -112,12 +96,7 @@ export function JournalPage({
         }
     }, [userId, refreshTrigger]);
 
-    // Forced PIN Setup flow
-    useEffect(() => {
-        if (initialPinSetupRequired) {
-            setShowSettings(true);
-        }
-    }, [initialPinSetupRequired]);
+
 
     // --------------------------------------------------------------------------------
     // THEME & UX
@@ -341,10 +320,7 @@ export function JournalPage({
 
             <SettingsOverlay
                 isOpen={showSettings}
-                onClose={() => {
-                    setShowSettings(false);
-                    if (initialPinSetupRequired) onPinSetupComplete?.();
-                }}
+                onClose={() => setShowSettings(false)}
                 aiEnabled={settings.ai_enabled}
                 onToggleAi={(v) => updateSetting('ai_enabled', v)}
                 aiRewriteEnabled={settings.ai_rewrite_enabled}
@@ -353,11 +329,6 @@ export function JournalPage({
                 onAccentChange={(v) => updateSetting('accent_color', v)}
                 sttLanguage={settings.stt_language}
                 onLanguageChange={(v) => updateSetting('stt_language', v)}
-                lockEnabled={externalLockEnabled}
-                onToggleLock={(v) => {
-                    onLockToggle?.(v);
-                    updateSetting('lock_enabled', v);
-                }}
                 notificationsEnabled={settings.notifications_enabled}
                 onToggleNotifications={(v) => {
                     updateSetting('notifications_enabled', v);
@@ -368,9 +339,6 @@ export function JournalPage({
                     updateSetting('notification_time', v);
                     if (settings.notifications_enabled) scheduleNotifications(true, v);
                 }}
-                pinCode={externalPinCode}
-                onPinChange={onPinChange}
-                isForcedSetup={initialPinSetupRequired}
                 mediaDisplayMode={settings.media_display_mode}
                 onMediaDisplayModeChange={(v) => updateSetting('media_display_mode', v)}
             />

@@ -11,7 +11,6 @@ export interface UserSettings {
     notifications_enabled: boolean;
     notification_time: string;
     media_display_mode: 'grid' | 'swipe' | 'scroll';
-    lock_enabled: boolean;
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -21,8 +20,7 @@ const DEFAULT_SETTINGS: UserSettings = {
     stt_language: 'Auto',
     notifications_enabled: false,
     notification_time: '20:00',
-    media_display_mode: 'grid',
-    lock_enabled: false
+    media_display_mode: 'grid'
 };
 
 /**

@@ -1,13 +1,11 @@
-import { Suspense, lazy, useEffect, useState, useRef } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
-import { supabase } from '@/utils/supabase/client';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { checkForUpdate, downloadUpdate, verifyChecksum, installUpdate, verifyInstallSuccess, hasActiveDownload, getDownloadState, deleteFile, type VersionManifest } from '@/utils/appUpdater';
 import { UpdateDialog } from '@/components/UpdateDialog';
 import { ForceUpdateDialog } from '@/components/ForceUpdateDialog';
 import { KillSwitchDialog } from '@/components/KillSwitchDialog';
-import { PinLock } from '@/components/PinLock';
 
 // Lazy load pages for performance optimization
 export const loadAuthPage = () => import('@/pages/AuthPage');
@@ -30,14 +28,6 @@ function App() {
     const navigate = useNavigate();
     const location = useLocation();
 
-    // Security State
-    const [isLocked, setIsLocked] = useState(false);
-    const [pinCode, setPinCode] = useState<string | null>(null);
-    const [lockEnabled, setLockEnabled] = useState(false);
-    const [accentColor, setAccentColor] = useState("bg-indigo-500");
-    const lastBackgroundTime = useRef<number | null>(null);
-    const [isPinSetupRequired, setIsPinSetupRequired] = useState(false);
-
     // Update system state
     const [updateManifest, setUpdateManifest] = useState<VersionManifest | null>(null);
     const [showUpdate, setShowUpdate] = useState(false);
@@ -49,38 +39,7 @@ function App() {
     const [isInstalling, setIsInstalling] = useState(false);
     const [updateError, setUpdateError] = useState<string | null>(null);
 
-    // Initial Security & Settings Load
-    useEffect(() => {
-        const loadSettings = async () => {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-                const { data: settings } = await supabase
-                    .from('user_settings')
-                    .select('*')
-                    .eq('user_id', user.id)
-                    .single();
 
-                if (settings) {
-                    setPinCode(settings.pin_code);
-                    setLockEnabled(!!settings.lock_enabled);
-                    setAccentColor(settings.accent_color || "bg-indigo-500");
-
-                    // Production-Grade PIN Logic
-                    const cachedPinHash = localStorage.getItem(`pin_hash_${user.id}`);
-
-                    if (settings.lock_enabled) {
-                        if (cachedPinHash) {
-                            setIsLocked(true);
-                        } else {
-                            // CASE: App Reinstall or Cache Cleared but Server says Locked
-                            setIsPinSetupRequired(true);
-                        }
-                    }
-                }
-            }
-        };
-        loadSettings();
-    }, []);
 
     // Check for updates on app launch (Android only)
     useEffect(() => {
@@ -130,10 +89,10 @@ function App() {
         }
     }, [location, navigate]);
 
-    // Global App Listeners (Updates & Security)
+    // Global App Listeners (Updates)
     useEffect(() => {
         const handleAppResume = async () => {
-            // 1. Update verification
+            // Update verification
             const pending = localStorage.getItem('pending_update_verif');
             if (pending) {
                 const versionCode = parseInt(pending);
@@ -147,23 +106,10 @@ function App() {
                     window.location.reload();
                 }
             }
-
-            // 2. Security Re-lock
-            if (lockEnabled && pinCode && lastBackgroundTime.current) {
-                const now = Date.now();
-                const diff = (now - lastBackgroundTime.current) / 1000;
-                // Auto-lock if backgrounded for more than 60 seconds (Production Threshold)
-                if (diff > 60) {
-                    setIsLocked(true);
-                }
-                lastBackgroundTime.current = null;
-            }
         };
 
         const handleAppStateChange = (state: { isActive: boolean }) => {
-            if (!state.isActive) {
-                lastBackgroundTime.current = Date.now();
-            } else {
+            if (state.isActive) {
                 handleAppResume();
             }
         };
@@ -175,7 +121,7 @@ function App() {
                 listener.remove();
             };
         }
-    }, [lockEnabled, pinCode]);
+    }, []);
 
     // Handle update download and installation
     const handleUpdate = async (overrideUrl?: string) => {
@@ -234,10 +180,6 @@ function App() {
 
     return (
         <ErrorBoundary>
-            {/* PIN Lock Overlay - Global Security */}
-            {isLocked && lockEnabled && pinCode && (
-                <PinLock onUnlock={() => setIsLocked(false)} accentColor={accentColor} storedPin={pinCode} />
-            )}
 
             {/* Kill Switch Dialog - Blocks everything */}
             {showKillSwitch && updateManifest && (
@@ -277,16 +219,7 @@ function App() {
                     <Route path="/auth" element={<AuthPage />} />
                     <Route
                         path="/app"
-                        element={
-                            <JournalPage
-                                externalPinCode={pinCode}
-                                externalLockEnabled={lockEnabled}
-                                onPinChange={(pin: string | null) => setPinCode(pin)}
-                                onLockToggle={(enabled: boolean) => setLockEnabled(enabled)}
-                                initialPinSetupRequired={isPinSetupRequired}
-                                onPinSetupComplete={() => setIsPinSetupRequired(false)}
-                            />
-                        }
+                        element={<JournalPage />}
                     />
                     <Route path="/privacy" element={<PrivacyPolicy />} />
                     <Route path="/terms" element={<TermsOfService />} />
