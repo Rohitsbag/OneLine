@@ -21,6 +21,9 @@ import { useAuth } from "@/hooks/useAuth";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useCamera } from "@/hooks/useCamera";
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
+import { useMemoryLane } from "@/hooks/useMemoryLane";
+import { useTTS } from "@/hooks/useTTS";
+import { MemoryLaneControls } from "./MemoryLaneControls";
 
 // Configuration
 const CONFIG = {
@@ -42,6 +45,9 @@ interface JournalEditorProps {
     sttLanguage?: string;
     aiRewriteEnabled?: boolean;
     mediaDisplayMode?: 'grid' | 'swipe' | 'scroll';
+    readingMode?: boolean;
+    isMemoryLaneActive?: boolean;
+    onMemoryLaneClose?: () => void;
 }
 
 // Sub-component for rendering media items
@@ -150,9 +156,14 @@ export function JournalEditor({
     refreshTrigger = 0,
     sttLanguage = "Auto",
     aiRewriteEnabled = false,
-    mediaDisplayMode = 'grid'
+    mediaDisplayMode = 'grid',
+    readingMode = false,
+    isMemoryLaneActive = false,
+    onMemoryLaneClose
 }: JournalEditorProps) {
     const dateStr = format(date, 'yyyy-MM-dd');
+    const accentObj = ACCENT_COLORS.find(a => a.bgClass === accentColor) || ACCENT_COLORS[0];
+    const hoverClass = (accentObj as any).hoverTextClass || "group-hover:text-white";
 
     // ============ INFRASTRUCTURE ============
     const { connected: isOnline } = useNetworkStatus();
@@ -181,6 +192,9 @@ export function JournalEditor({
     // Transcription-specific state (different from voice note recording)
     const [isTranscriptionRecording, setIsTranscriptionRecording] = useState(false);
 
+    // Memory Lane State
+    const [isMemoryLanePlaying, setIsMemoryLanePlaying] = useState(true);
+
     // ============ REFS ============
     const contentRef = useRef(content);
     const mediaItemsRef = useRef(mediaItems);
@@ -204,6 +218,26 @@ export function JournalEditor({
         isMountedRef.current = true;
         return () => { isMountedRef.current = false; };
     }, []);
+
+    // ============ MEMORY LANE HOOKS ============
+    const { isInteracting, settings: mlSettings, updateSettings: updateMlSettings } = useMemoryLane(
+        () => onDateChange(subDays(date, 1)), // Auto-advance goes to PAST
+        content.length,
+        isMemoryLanePlaying && isMemoryLaneActive,
+        setIsMemoryLanePlaying
+    );
+
+    const { voices: ttsVoices, isSpeaking, settings: ttsSettings, updateSettings: updateTtsSettings } = useTTS(
+        content,
+        isMemoryLanePlaying && isMemoryLaneActive,
+        isInteracting
+    );
+
+    // Auto-pause/play when Memory Lane toggles
+    useEffect(() => {
+        if (isMemoryLaneActive) setIsMemoryLanePlaying(true);
+        else setIsMemoryLanePlaying(false);
+    }, [isMemoryLaneActive]);
 
     // ============ HAPTIC FEEDBACK ============
     const triggerHaptic = useCallback(async (style: ImpactStyle = ImpactStyle.Light) => {
@@ -813,17 +847,12 @@ export function JournalEditor({
     const handleNativeOCR = useCallback(async () => {
         setShowCameraMenu(false);
 
-        if (!isOnline) {
-            showToast("Internet required for text recognition", "warning");
-            return;
-        }
-
         const result = await capturePhoto();
         if (result) {
             const file = new File([result.blob], "ocr.jpg", { type: result.blob.type });
             await handleOCR(file);
         }
-    }, [capturePhoto, handleOCR, isOnline, showToast]);
+    }, [capturePhoto, handleOCR]);
 
     // ============ BUTTON HANDLERS ============
     const handleMicButtonClick = useCallback(() => {
@@ -929,6 +958,14 @@ export function JournalEditor({
         }
     }, [processImageFile]);
 
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            saveEntry();
+            textareaRef.current?.blur();
+        }
+    };
+
     // ============ CLOSE MENUS ON OUTSIDE CLICK ============
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
@@ -943,13 +980,31 @@ export function JournalEditor({
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    // ============ ACCENT COLOR ============
-    const accentObj = ACCENT_COLORS.find(c => c.bgClass === accentColor) || ACCENT_COLORS[0];
-    const hoverClass = (accentObj as any).hoverTextClass || "group-hover:text-white";
+
 
     // ============ RENDER ============
     return (
         <div className="flex flex-col flex-1 max-w-2xl w-full mx-auto mt-12 mb-8 items-center px-4">
+            {isMemoryLaneActive && (
+                <MemoryLaneControls
+                    isPlaying={isMemoryLanePlaying}
+                    onTogglePlay={() => setIsMemoryLanePlaying(!isMemoryLanePlaying)}
+                    onClose={() => {
+                        setIsMemoryLanePlaying(false);
+                        onMemoryLaneClose?.();
+                    }}
+                    onNext={() => onDateChange(subDays(date, 1))} // Next = Continue to Past
+                    onPrev={() => onDateChange(addDays(date, 1))} // Prev = Go back to Future
+                    isInteracting={isInteracting}
+                    mlSettings={mlSettings}
+                    updateMlSettings={updateMlSettings}
+                    ttsSettings={ttsSettings}
+                    updateTtsSettings={updateTtsSettings}
+                    ttsVoices={ttsVoices}
+                    isSpeaking={isSpeaking}
+                    accentColor={accentColor}
+                />
+            )}
             {/* Date Navigation Header */}
             <div className="flex items-center gap-6 mb-12">
                 <button
@@ -998,33 +1053,47 @@ export function JournalEditor({
             {/* Text Editor */}
             <div
                 className={cn(
-                    "w-full relative rounded-xl transition-all",
-                    isDragging && "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-300"
+                    "w-full bg-white dark:bg-zinc-900 rounded-3xl shadow-sm border border-zinc-100 dark:border-zinc-800 overflow-hidden transition-all duration-500",
+                    readingMode && "shadow-none border-transparent bg-transparent dark:bg-transparent"
                 )}
-                onDragOver={onDragOver}
-                onDragLeave={onDragLeave}
-                onDrop={onDrop}
             >
                 <textarea
                     ref={textareaRef}
                     value={content}
                     onChange={(e) => {
-                        if (isGuest && onGuestAction) {
-                            onGuestAction();
-                            return;
-                        }
                         setContent(e.target.value);
+                        adjustTextareaHeight();
                     }}
-                    onFocus={() => {
-                        if (isGuest && onGuestAction) {
-                            textareaRef.current?.blur();
-                            onGuestAction();
-                        }
-                    }}
-                    placeholder={isDragging ? "Drop image here..." : "One line for today..."}
-                    className="w-full bg-transparent text-xl md:text-2xl text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-600 resize-none outline-none min-h-[150px] text-left md:text-center font-light leading-relaxed p-4"
-                    spellCheck={false}
+                    onKeyDown={handleKeyDown}
+                    disabled={readingMode}
+                    placeholder={readingMode ? "No entry for this day..." : "Write about your day..."}
+                    className={cn(
+                        "w-full p-6 bg-transparent resize-none outline-none text-lg leading-relaxed text-zinc-800 dark:text-zinc-200 placeholder:text-zinc-300 dark:placeholder:text-zinc-700 transition-all font-light",
+                        readingMode ? "text-2xl leading-loose text-center cursor-default select-none" : "min-h-[200px]"
+                    )}
+                    rows={1}
                 />
+
+                {/* Media Grid */}
+                <div className={cn(
+                    "w-full px-6 pb-6 grid gap-4 transition-all duration-500",
+                    mediaDisplayMode === 'grid' ? "grid-cols-2" : "grid-cols-1",
+                    readingMode && "mt-8"
+                )}>
+                    {mediaItems.map((item, index) => (
+                        <div key={index} className="relative aspect-square rounded-2xl overflow-hidden bg-zinc-100 dark:bg-zinc-800 group">
+                            <MediaItemView item={item} accentColor={accentColor} />
+                            {!readingMode && (
+                                <button
+                                    onClick={() => removeMedia(index)}
+                                    className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500/80 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all backdrop-blur-sm"
+                                >
+                                    <Trash2 className="w-4 h-4" />
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
 
                 {/* Status indicator */}
                 <div className="flex justify-end px-4 pb-2">
@@ -1038,306 +1107,224 @@ export function JournalEditor({
                 </div>
             </div>
 
-            {/* Hidden File Inputs */}
-            <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleImageUpload}
-                className="hidden"
-            />
-            <input
-                ref={ocrFileInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleOCRUpload}
-                className="hidden"
-            />
-            {/* 
-            <input
-                ref={videoFileInputRef}
-                type="file"
-                accept="video/*"
-                onChange={handleVideoUpload}
-                className="hidden"
-            />
-            */}
+            {!readingMode && (
+                <>
+                    {/* Hidden Inputs */}
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageUpload}
+                        className="hidden"
+                    />
+                    <input
+                        ref={ocrFileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleOCRUpload}
+                        className="hidden"
+                    />
 
-            {/* Action Buttons */}
-            <div className="flex w-full justify-center gap-10 mt-10 mb-4">
-                {/* Microphone Button */}
-                <div className="relative" ref={micMenuRef}>
-                    <button
-                        onClick={handleMicButtonClick}
-                        disabled={isTranscribing || isProcessingOCR}
-                        className={cn(
-                            "group p-4 rounded-full transition-all duration-300",
-                            isTranscriptionRecording || voiceRecorder.isRecording
-                                ? "bg-red-500 scale-110 shadow-lg shadow-red-500/30"
-                                : showMicMenu
-                                    ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700"
-                                    : "hover:bg-black/5 dark:hover:bg-white/10"
-                        )}
-                    >
-                        {voiceRecorder.isRecording || isTranscriptionRecording ? (
-                            <div className="flex items-center gap-2">
-                                <Square className="w-5 h-5 text-white fill-current" />
-                                <span className="text-white text-xs font-mono">
-                                    {Math.floor(voiceRecorder.duration / 60)}:{(voiceRecorder.duration % 60).toString().padStart(2, '0')}
-                                </span>
-                            </div>
-                        ) : isTranscribing ? (
-                            <Loader2 className="w-6 h-6 text-zinc-600 animate-spin" />
-                        ) : (
-                            <Mic className={cn("w-6 h-6 text-zinc-600", hoverClass)} />
-                        )}
-                    </button>
-
-                    {/* Microphone Menu */}
-                    {showMicMenu && !voiceRecorder.isRecording && !isTranscriptionRecording && (
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl min-w-[160px] z-50">
+                    {/* Action Buttons */}
+                    <div className="flex w-full justify-center gap-10 mt-10 mb-4">
+                        {/* Microphone Button */}
+                        <div className="relative" ref={micMenuRef}>
                             <button
-                                onClick={() => {
-                                    setShowMicMenu(false);
-                                    startTranscription();
-                                }}
-                                disabled={!isOnline}
-                                className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors disabled:opacity-50"
+                                onClick={handleMicButtonClick}
+                                disabled={isTranscribing || isProcessingOCR}
+                                className={cn(
+                                    "group p-4 rounded-full transition-all duration-300",
+                                    isTranscriptionRecording || voiceRecorder.isRecording
+                                        ? "bg-red-500 scale-110 shadow-lg shadow-red-500/30"
+                                        : showMicMenu
+                                            ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700"
+                                            : "hover:bg-black/5 dark:hover:bg-white/10"
+                                )}
                             >
-                                <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 flex items-center justify-center">
-                                    <Mic className="w-4 h-4 text-indigo-500" />
-                                </div>
-                                <div className="text-left">
-                                    <div className="text-sm font-medium text-zinc-900 dark:text-white">Transcribe</div>
-                                    <div className="text-[10px] text-zinc-500">
-                                        {isOnline ? "Speech to text" : "Requires internet"}
+                                {voiceRecorder.isRecording || isTranscriptionRecording ? (
+                                    <div className="flex items-center gap-2">
+                                        <Square className="w-5 h-5 text-white fill-current" />
+                                        <span className="text-white text-xs font-mono">
+                                            {Math.floor(voiceRecorder.duration / 60)}:{(voiceRecorder.duration % 60).toString().padStart(2, '0')}
+                                        </span>
                                     </div>
-                                </div>
+                                ) : isTranscribing ? (
+                                    <Loader2 className="w-6 h-6 text-zinc-600 animate-spin" />
+                                ) : (
+                                    <Mic className={cn("w-6 h-6 text-zinc-600", hoverClass)} />
+                                )}
                             </button>
 
-                            <button
-                                onClick={() => {
-                                    setShowMicMenu(false);
-                                    startVoiceNote();
-                                }}
-                                className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
-                            >
-                                <div className="w-8 h-8 rounded-lg bg-red-50 dark:bg-red-500/20 flex items-center justify-center">
-                                    <AudioLines className="w-4 h-4 text-red-500" />
+                            {/* Microphone Menu */}
+                            {showMicMenu && !voiceRecorder.isRecording && !isTranscriptionRecording && (
+                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl min-w-[160px] z-50">
+                                    <button
+                                        onClick={() => {
+                                            setShowMicMenu(false);
+                                            startTranscription();
+                                        }}
+                                        disabled={!isOnline}
+                                        className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors disabled:opacity-50"
+                                    >
+                                        <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 flex items-center justify-center">
+                                            <Mic className="w-4 h-4 text-indigo-500" />
+                                        </div>
+                                        <div className="text-left">
+                                            <div className="text-sm font-medium text-zinc-900 dark:text-white">Transcribe</div>
+                                            <div className="text-[10px] text-zinc-500">
+                                                {isOnline ? "Speech to text" : "Requires internet"}
+                                            </div>
+                                        </div>
+                                    </button>
+
+                                    <button
+                                        onClick={() => {
+                                            setShowMicMenu(false);
+                                            startVoiceNote();
+                                        }}
+                                        className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
+                                    >
+                                        <div className="w-8 h-8 rounded-lg bg-red-50 dark:bg-red-500/20 flex items-center justify-center">
+                                            <AudioLines className="w-4 h-4 text-red-500" />
+                                        </div>
+                                        <div className="text-left">
+                                            <div className="text-sm font-medium text-zinc-900 dark:text-white">Voice Note</div>
+                                            <div className="text-[10px] text-zinc-500">
+                                                {isOnline ? "Save audio" : "Works offline"}
+                                            </div>
+                                        </div>
+                                    </button>
                                 </div>
-                                <div className="text-left">
-                                    <div className="text-sm font-medium text-zinc-900 dark:text-white">Voice Note</div>
-                                    <div className="text-[10px] text-zinc-500">
-                                        {isOnline ? "Save audio" : "Works offline"}
-                                    </div>
-                                </div>
-                            </button>
+                            )}
                         </div>
-                    )}
-                </div>
 
-                {/* Camera Button */}
-                <div className="relative" ref={cameraMenuRef}>
-                    <button
-                        onClick={handleCameraButtonClick}
-                        disabled={isUploading || isProcessingOCR || isCameraProcessing}
-                        className={cn(
-                            "group p-4 rounded-full transition-all duration-300",
-                            isProcessingOCR || isCameraProcessing
-                                ? "bg-blue-500/20"
-                                : showCameraMenu
-                                    ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700"
-                                    : "hover:bg-black/5 dark:hover:bg-white/10"
-                        )}
-                    >
-                        {isProcessingOCR || isCameraProcessing || isUploading ? (
-                            <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
-                        ) : (
-                            <Camera className={cn("w-6 h-6 text-zinc-600", hoverClass)} />
-                        )}
-                    </button>
-
-                    {/* Camera Menu */}
-                    {showCameraMenu && (
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl min-w-[160px] z-50">
+                        {/* Camera Button */}
+                        <div className="relative" ref={cameraMenuRef}>
                             <button
-                                onClick={() => {
-                                    setShowCameraMenu(false);
-                                    if (Capacitor.isNativePlatform()) {
-                                        handleNativePhoto();
-                                    } else {
-                                        fileInputRef.current?.click();
-                                    }
-                                }}
-                                className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
+                                onClick={handleCameraButtonClick}
+                                disabled={isUploading || isProcessingOCR || isCameraProcessing}
+                                className={cn(
+                                    "group p-4 rounded-full transition-all duration-300",
+                                    isProcessingOCR || isCameraProcessing
+                                        ? "bg-blue-500/20"
+                                        : showCameraMenu
+                                            ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700"
+                                            : "hover:bg-black/5 dark:hover:bg-white/10"
+                                )}
                             >
-                                <div className="w-8 h-8 rounded-lg bg-orange-50 dark:bg-orange-500/20 flex items-center justify-center">
-                                    <Camera className="w-4 h-4 text-orange-500" />
-                                </div>
-                                <div className="text-left">
-                                    <div className="text-sm font-medium text-zinc-900 dark:text-white">Photo</div>
-                                    <div className="text-[10px] text-zinc-500">
-                                        {isOnline ? "Capture & upload" : "Save locally"}
-                                    </div>
-                                </div>
+                                {isProcessingOCR || isCameraProcessing || isUploading ? (
+                                    <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+                                ) : (
+                                    <Camera className={cn("w-6 h-6 text-zinc-600", hoverClass)} />
+                                )}
                             </button>
 
-                            <button
-                                onClick={() => {
-                                    setShowCameraMenu(false);
-                                    if (Capacitor.isNativePlatform()) {
-                                        handleNativeOCR();
-                                    } else {
-                                        ocrFileInputRef.current?.click();
-                                    }
-                                }}
-                                disabled={!isOnline}
-                                className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors disabled:opacity-50"
-                            >
-                                <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-500/20 flex items-center justify-center">
-                                    <ScanText className="w-4 h-4 text-blue-500" />
-                                </div>
-                                <div className="text-left">
-                                    <div className="text-sm font-medium text-zinc-900 dark:text-white">Scan Text</div>
-                                    <div className="text-[10px] text-zinc-500">
-                                        {isOnline ? "Extract text (OCR)" : "Requires internet"}
-                                    </div>
-                                </div>
-                            </button>
+                            {/* Camera Menu */}
+                            {showCameraMenu && (
+                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl min-w-[160px] z-50">
+                                    <button
+                                        onClick={() => {
+                                            setShowCameraMenu(false);
+                                            if (Capacitor.isNativePlatform()) {
+                                                handleNativePhoto();
+                                            } else {
+                                                fileInputRef.current?.click();
+                                            }
+                                        }}
+                                        className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
+                                    >
+                                        <div className="w-8 h-8 rounded-lg bg-orange-50 dark:bg-orange-500/20 flex items-center justify-center">
+                                            <Camera className="w-4 h-4 text-orange-500" />
+                                        </div>
+                                        <div className="text-left">
+                                            <div className="text-sm font-medium text-zinc-900 dark:text-white">Photo</div>
+                                            <div className="text-[10px] text-zinc-500">
+                                                {isOnline ? "Capture & upload" : "Save locally"}
+                                            </div>
+                                        </div>
+                                    </button>
 
-                            <button
-                                onClick={async () => {
-                                    setShowCameraMenu(false);
-                                    showToast("Video support coming soon", "info");
-                                    // Video feature disabled for now - uncomment to enable
-                                    /*
-                                    if (Capacitor.isNativePlatform()) {
-                                        const result = await captureVideo();
-                                        if (result?.blob) {
-                                            const file = new File([result.blob], `video.${result.format}`, { type: `video/${result.format}` });
-                                            await processVideoFile(file);
-                                        }
-                                    } else {
-                                        videoFileInputRef.current?.click();
-                                    }
-                                    */
-                                }}
-                                className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
-                            >
-                                <div className="w-8 h-8 rounded-lg bg-purple-50 dark:bg-purple-500/20 flex items-center justify-center opacity-50">
-                                    <Video className="w-4 h-4 text-purple-500" />
+                                    <button
+                                        onClick={() => {
+                                            setShowCameraMenu(false);
+                                            if (Capacitor.isNativePlatform()) {
+                                                handleNativeOCR();
+                                            } else {
+                                                ocrFileInputRef.current?.click();
+                                            }
+                                        }}
+                                        className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
+                                    >
+                                        <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-500/20 flex items-center justify-center">
+                                            <ScanText className="w-4 h-4 text-blue-500" />
+                                        </div>
+                                        <div className="text-left">
+                                            <div className="text-sm font-medium text-zinc-900 dark:text-white">Scan Text</div>
+                                            <div className="text-[10px] text-zinc-500">Extract text (OCR)</div>
+                                        </div>
+                                    </button>
+
+                                    <button
+                                        onClick={async () => {
+                                            setShowCameraMenu(false);
+                                            showToast("Video support coming soon", "info");
+                                        }}
+                                        className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
+                                    >
+                                        <div className="w-8 h-8 rounded-lg bg-purple-50 dark:bg-purple-500/20 flex items-center justify-center opacity-50">
+                                            <Video className="w-4 h-4 text-purple-500" />
+                                        </div>
+                                        <div className="text-left opacity-50">
+                                            <div className="text-sm font-medium text-zinc-900 dark:text-white">Video</div>
+                                            <div className="text-[10px] text-zinc-500">
+                                                Coming soon
+                                            </div>
+                                        </div>
+                                    </button>
                                 </div>
-                                <div className="text-left opacity-50">
-                                    <div className="text-sm font-medium text-zinc-900 dark:text-white">Video</div>
-                                    <div className="text-[10px] text-zinc-500">
-                                        Coming soon
-                                    </div>
-                                </div>
-                            </button>
-                        </div>
-                    )}
-                </div>
-            </div>
+                            )}
+                        </div >
+                    </div >
+                </>
+            )}
 
             {/* AI Rewrite Button */}
-            {aiRewriteEnabled && content.trim().length > 20 && isOnline && (
-                <button
-                    onClick={async () => {
-                        if (isRewriting) return;
-                        setIsRewriting(true);
-                        try {
-                            const { performRewrite } = await import("@/utils/ai");
-                            const result = await performRewrite(content);
-                            if (result) {
-                                setContent(result);
-                                showToast("Entry polished", "success");
+            {
+                aiRewriteEnabled && content.trim().length > 20 && isOnline && (
+                    <button
+                        onClick={async () => {
+                            if (isRewriting) return;
+                            setIsRewriting(true);
+                            try {
+                                const { performRewrite } = await import("@/utils/ai");
+                                const result = await performRewrite(content);
+                                if (result) {
+                                    setContent(result);
+                                    showToast("Entry polished", "success");
+                                }
+                            } catch (e: any) {
+                                showToast(e.message || "Rewrite failed", "error");
+                            } finally {
+                                setIsRewriting(false);
                             }
-                        } catch (e: any) {
-                            showToast(e.message || "Rewrite failed", "error");
-                        } finally {
-                            setIsRewriting(false);
-                        }
-                    }}
-                    disabled={isRewriting}
-                    className={cn(
-                        "flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all",
-                        isRewriting
-                            ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400"
-                            : "bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700"
-                    )}
-                >
-                    {isRewriting ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                        <Sparkles className={cn("w-4 h-4", accentObj.class)} />
-                    )}
-                    <span>{isRewriting ? "Refining..." : "Polish with AI"}</span>
-                </button>
-            )}
-
-            {/* Media Display */}
-            {mediaItems.length > 0 && (
-                <div className="w-full mt-8">
-                    {/* Images & Videos */}
-                    {mediaItems.filter(i => i.type === 'image' || i.type === 'video').length > 0 && (
-                        <div className={cn(
-                            mediaDisplayMode === 'grid' ? "grid grid-cols-2 gap-3" :
-                                mediaDisplayMode === 'swipe' ? "flex overflow-x-auto snap-x gap-4 pb-4" :
-                                    "flex flex-col gap-4"
-                        )}>
-                            {mediaItems.map((item, index) => {
-                                if (item.type !== 'image' && item.type !== 'video') return null;
-                                return (
-                                    <div
-                                        key={`${item.url}-${index}`}
-                                        className={cn(
-                                            "relative group rounded-xl overflow-hidden bg-zinc-100 dark:bg-zinc-800",
-                                            mediaDisplayMode === 'grid' ? "aspect-video" :
-                                                mediaDisplayMode === 'swipe' ? "min-w-[80vw] aspect-video snap-center" :
-                                                    "w-full aspect-video"
-                                        )}
-                                    >
-                                        <MediaItemView item={item} />
-                                        <button
-                                            onClick={() => removeMedia(index)}
-                                            className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                                        >
-                                            <X className="w-4 h-4" />
-                                        </button>
-                                        {item.url.startsWith('local://') && (
-                                            <div className="absolute bottom-2 left-2 px-2 py-1 bg-amber-500/80 rounded text-[10px] text-white">
-                                                Pending upload
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
-
-                    {/* Audio Items */}
-                    <div className="space-y-3 mt-4">
-                        {mediaItems.map((item, index) => {
-                            if (item.type !== 'audio') return null;
-                            return (
-                                <div key={`${item.url}-${index}`} className="relative group">
-                                    <MediaItemView item={item} accentColor={accentColor} />
-                                    <button
-                                        onClick={() => removeMedia(index)}
-                                        className="absolute top-1/2 -translate-y-1/2 -right-10 p-1.5 text-zinc-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    >
-                                        <Trash2 className="w-4 h-4" />
-                                    </button>
-                                    {item.url.startsWith('local://') && (
-                                        <span className="text-[10px] text-amber-500 ml-2">• Pending upload</span>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            )}
-        </div>
+                        }}
+                        disabled={isRewriting}
+                        className={cn(
+                            "flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all mx-auto mt-4",
+                            isRewriting
+                                ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400"
+                                : "bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                        )}
+                    >
+                        {isRewriting ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                            <Sparkles className={cn("w-4 h-4", accentObj.class)} />
+                        )}
+                        <span>{isRewriting ? "Refining..." : "Polish with AI"}</span>
+                    </button>
+                )
+            }
+        </div >
     );
 }

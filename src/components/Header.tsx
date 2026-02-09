@@ -1,4 +1,4 @@
-import { Calendar, Settings, Sun, Moon, Clock, LayoutGrid, X } from "lucide-react";
+import { Calendar, Settings, Sun, Moon, Clock, LayoutGrid, X, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { useState, useRef, useEffect } from "react";
@@ -10,9 +10,10 @@ interface HeaderProps {
     isDark: boolean;
     toggleTheme: () => void;
     accentColor?: string;
+    onStartMemoryLane: () => void;
 }
 
-export function Header({ onOpenCalendar, onOpenSettings, onOpenTimeline, isDark, toggleTheme, accentColor = "bg-indigo-500" }: HeaderProps) {
+export function Header({ onOpenCalendar, onOpenSettings, onOpenTimeline, isDark, toggleTheme, accentColor = "bg-indigo-500", onStartMemoryLane }: HeaderProps) {
     const [showMenu, setShowMenu] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
 
@@ -34,8 +35,9 @@ export function Header({ onOpenCalendar, onOpenSettings, onOpenTimeline, isDark,
     const menuItems = [
         { icon: Calendar, label: "Calendar", onClick: onOpenCalendar },
         { icon: Clock, label: "Timeline", onClick: onOpenTimeline },
-        { icon: isDark ? Sun : Moon, label: isDark ? "Light Mode" : "Dark Mode", onClick: toggleTheme },
         { icon: Settings, label: "Settings", onClick: onOpenSettings },
+        { icon: Play, label: "Memory Lane", onClick: onStartMemoryLane },
+        { icon: isDark ? Sun : Moon, label: isDark ? "Light Mode" : "Dark Mode", onClick: toggleTheme },
     ];
 
     return (

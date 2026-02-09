@@ -36,6 +36,7 @@ export function JournalPage() {
     const [pullProgress, setPullProgress] = useState(0);
     const [isPulling, setIsPulling] = useState(false);
     const [pendingSyncCount, setPendingSyncCount] = useState(0);
+    const [isMemoryLaneActive, setIsMemoryLaneActive] = useState(false);
 
     const startY = useRef<number | null>(null);
     const PULL_THRESHOLD = 120;
@@ -243,8 +244,10 @@ export function JournalPage() {
                 }}
                 onOpenTimeline={() => setShowTimeline(true)}
                 isDark={isDark}
+
                 toggleTheme={() => setIsDark(!isDark)}
                 accentColor={settings.accent_color}
+                onStartMemoryLane={() => setIsMemoryLaneActive(true)}
             />
 
             <div
@@ -287,9 +290,13 @@ export function JournalPage() {
                     isGuest={isGuest}
                     onGuestAction={() => setShowAuthModal(true)}
                     refreshTrigger={refreshTrigger}
+
                     sttLanguage={settings.stt_language}
                     aiRewriteEnabled={settings.ai_rewrite_enabled}
                     mediaDisplayMode={settings.media_display_mode}
+                    isMemoryLaneActive={isMemoryLaneActive}
+                    onMemoryLaneClose={() => setIsMemoryLaneActive(false)}
+                    readingMode={isMemoryLaneActive} // Force reading mode during Memory Lane
                 />
 
                 {settings.ai_enabled && (
