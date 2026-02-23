@@ -27,12 +27,3 @@ coverage/
 
 # Supabase local
 .supabase/
-
-# Android (Capacitor)
-android/keystore/
-android/keystore.properties
-*.keystore
-*.jks
-
-# Capacitor
-capacitor-*.lock

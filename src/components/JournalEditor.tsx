@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import {
-    ChevronLeft, ChevronRight, Mic, Camera, Video, X, Square,
+    ChevronLeft, ChevronRight, Mic, Camera, Video, Square,
     AudioLines, ScanText, Loader2, Trash2, Sparkles, WifiOff
 } from "lucide-react";
 import { format, addDays, subDays, isSameDay } from "date-fns";
@@ -11,16 +11,12 @@ import { transcribeAudio } from "@/utils/ai";
 import { AudioPlayer } from "./AudioPlayer";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { useToast } from "./Toast";
-import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Capacitor } from '@capacitor/core';
 import { MediaItem, canAddMedia } from "@/types/media";
 import { Storage, STORAGE_KEYS } from "@/utils/storage";
 import { OfflineQueue } from "@/utils/offlineQueue";
 import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 import { useAuth } from "@/hooks/useAuth";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
-import { useCamera } from "@/hooks/useCamera";
-import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { useMemoryLane } from "@/hooks/useMemoryLane";
 import { useTTS } from "@/hooks/useTTS";
 import { MemoryLaneControls } from "./MemoryLaneControls";
@@ -63,31 +59,9 @@ const MediaItemView = ({ item, accentColor, onError }: {
     useEffect(() => {
         isMounted.current = true;
         const load = async () => {
-            // Direct URLs
+            // Direct URLs (http, data, blob)
             if (item.url.startsWith('http') || item.url.startsWith('data:') || item.url.startsWith('blob:')) {
                 setUrl(item.url);
-                return;
-            }
-
-            // Local files
-            if (item.url.startsWith('local://')) {
-                try {
-                    const fileName = item.url.replace('local://', '');
-                    const fileData = await Filesystem.readFile({
-                        path: fileName,
-                        directory: Directory.Data
-                    });
-                    const mime = item.type === 'image' ? 'image/webp' :
-                        item.type === 'audio' ? 'audio/webm' : 'video/mp4';
-                    const src = `data:${mime};base64,${fileData.data}`;
-                    if (isMounted.current) setUrl(src);
-                } catch (e) {
-                    console.error("Local file load failed:", e);
-                    if (isMounted.current) {
-                        setError(true);
-                        onError?.();
-                    }
-                }
                 return;
             }
 
@@ -169,7 +143,6 @@ export function JournalEditor({
     const { connected: isOnline } = useNetworkStatus();
     const { userId } = useAuth(isOnline);
     const { showToast } = useToast();
-    const { capturePhoto, /* captureVideo, */ isCapturing: isCameraProcessing } = useCamera();
     const voiceRecorder = useVoiceRecorder();
 
     // ============ ENTRY STATE ============
@@ -240,15 +213,13 @@ export function JournalEditor({
     }, [isMemoryLaneActive]);
 
     // ============ HAPTIC FEEDBACK ============
-    const triggerHaptic = useCallback(async (style: ImpactStyle = ImpactStyle.Light) => {
+    const triggerHaptic = useCallback(() => {
         try {
-            if (Capacitor.isNativePlatform()) {
-                await Haptics.impact({ style });
-            } else if (navigator.vibrate) {
+            if (navigator.vibrate) {
                 navigator.vibrate(10);
             }
         } catch (e) {
-            // Haptics not available
+            // Vibration not available
         }
     }, []);
 
@@ -457,12 +428,10 @@ export function JournalEditor({
         isDirtyRef.current = true;
 
         try {
-            if (item.url.startsWith('local://')) {
-                await Filesystem.deleteFile({
-                    path: item.url.replace('local://', ''),
-                    directory: Directory.Data
-                }).catch(() => { });
-            } else if (!item.url.startsWith('http') && !item.url.startsWith('blob:') && !item.url.startsWith('data:')) {
+            // Revoke blob URLs to free memory
+            if (item.url.startsWith('blob:')) {
+                URL.revokeObjectURL(item.url);
+            } else if (!item.url.startsWith('http') && !item.url.startsWith('data:')) {
                 await supabase.storage
                     .from('journal-media-private')
                     .remove([item.url])
@@ -494,30 +463,18 @@ export function JournalEditor({
             }
 
             if (!isOnline) {
-                // Save locally for offline (Original Logic)
-                const reader = new FileReader();
-                const base64Data = await new Promise<string>((resolve, reject) => {
-                    reader.onload = () => resolve(reader.result as string);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(compressedBlob);
-                });
-
-                const fileName = `offline-image-${Date.now()}.webp`;
-                await Filesystem.writeFile({
-                    path: fileName,
-                    data: base64Data.split(',')[1],
-                    directory: Directory.Data
-                });
+                // Save as blob URL for offline (session-only, lost on reload)
+                const blobUrl = URL.createObjectURL(compressedBlob);
 
                 const remotePath = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.webp`;
                 await OfflineQueue.addPendingMedia(userId, {
-                    localPath: `local://${fileName}`,
+                    localPath: blobUrl,
                     remotePath,
                     type: 'image',
                     entryDate: dateStr
                 });
 
-                addMedia({ type: 'image', url: `local://${fileName}` });
+                addMedia({ type: 'image', url: blobUrl });
                 showToast("Image saved locally - will sync when online", "success");
 
             } else {
@@ -537,30 +494,18 @@ export function JournalEditor({
                 } catch (uploadError) {
                     console.warn("Online upload failed, falling back to offline save:", uploadError);
 
-                    // FALLBACK LOGIC (Duplicate of offline block)
-                    const reader = new FileReader();
-                    const base64Data = await new Promise<string>((resolve, reject) => {
-                        reader.onload = () => resolve(reader.result as string);
-                        reader.onerror = reject;
-                        reader.readAsDataURL(compressedBlob);
-                    });
-
-                    const fileName = `offline-image-${Date.now()}.webp`;
-                    await Filesystem.writeFile({
-                        path: fileName,
-                        data: base64Data.split(',')[1],
-                        directory: Directory.Data
-                    });
+                    // Fallback: save as blob URL (session-only)
+                    const blobUrl = URL.createObjectURL(compressedBlob);
 
                     const remotePath = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.webp`;
                     await OfflineQueue.addPendingMedia(userId, {
-                        localPath: `local://${fileName}`,
+                        localPath: blobUrl,
                         remotePath,
                         type: 'image',
                         entryDate: dateStr
                     });
 
-                    addMedia({ type: 'image', url: `local://${fileName}` });
+                    addMedia({ type: 'image', url: blobUrl });
                     showToast("Saved offline (Upload failed)", "success");
                 }
             }
@@ -638,24 +583,12 @@ export function JournalEditor({
                 audioBlob.type.includes('ogg') ? 'ogg' : 'webm';
 
             if (!isOnline) {
-                // Save locally (Original Logic)
-                const reader = new FileReader();
-                const base64Data = await new Promise<string>((resolve, reject) => {
-                    reader.onload = () => resolve(reader.result as string);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(audioBlob);
-                });
-
-                const fileName = `offline-audio-${Date.now()}.${ext}`;
-                await Filesystem.writeFile({
-                    path: fileName,
-                    data: base64Data.split(',')[1],
-                    directory: Directory.Data
-                });
+                // Save as blob URL for offline (session-only)
+                const blobUrl = URL.createObjectURL(audioBlob);
 
                 const remotePath = `${userId}/audio-${Date.now()}.${ext}`;
                 await OfflineQueue.addPendingMedia(userId, {
-                    localPath: `local://${fileName}`,
+                    localPath: blobUrl,
                     remotePath,
                     type: 'audio',
                     entryDate: dateStr
@@ -663,7 +596,7 @@ export function JournalEditor({
 
                 addMedia({
                     type: 'audio',
-                    url: `local://${fileName}`,
+                    url: blobUrl,
                     duration_seconds: duration
                 });
                 showToast("Voice note saved locally", "success");
@@ -688,24 +621,12 @@ export function JournalEditor({
                 } catch (uploadError) {
                     console.warn("Voice upload failed, falling back to offline save:", uploadError);
 
-                    // FALLBACK LOGIC
-                    const reader = new FileReader();
-                    const base64Data = await new Promise<string>((resolve, reject) => {
-                        reader.onload = () => resolve(reader.result as string);
-                        reader.onerror = reject;
-                        reader.readAsDataURL(audioBlob);
-                    });
-
-                    const localFileName = `offline-audio-${Date.now()}.${ext}`;
-                    await Filesystem.writeFile({
-                        path: localFileName,
-                        data: base64Data.split(',')[1],
-                        directory: Directory.Data
-                    });
+                    // Fallback: save as blob URL (session-only)
+                    const blobUrl = URL.createObjectURL(audioBlob);
 
                     const remotePath = `${userId}/audio-${Date.now()}.${ext}`;
                     await OfflineQueue.addPendingMedia(userId, {
-                        localPath: `local://${localFileName}`,
+                        localPath: blobUrl,
                         remotePath,
                         type: 'audio',
                         entryDate: dateStr
@@ -713,7 +634,7 @@ export function JournalEditor({
 
                     addMedia({
                         type: 'audio',
-                        url: `local://${localFileName}`,
+                        url: blobUrl,
                         duration_seconds: duration
                     });
                     showToast("Saved offline (Upload failed)", "success");
@@ -735,7 +656,7 @@ export function JournalEditor({
         try {
             await voiceRecorder.start();
             setIsTranscriptionRecording(true);
-            triggerHaptic(ImpactStyle.Medium);
+            triggerHaptic();
         } catch (e) {
             showToast("Could not start microphone", "error");
         }
@@ -789,7 +710,7 @@ export function JournalEditor({
     const startVoiceNote = useCallback(async () => {
         try {
             await voiceRecorder.start();
-            triggerHaptic(ImpactStyle.Medium);
+            triggerHaptic();
         } catch (e) {
             showToast("Could not start microphone", "error");
         }
@@ -834,25 +755,7 @@ export function JournalEditor({
         }
     }, [isOnline, showToast]);
 
-    // ============ NATIVE CAMERA ============
-    const handleNativePhoto = useCallback(async () => {
-        setShowCameraMenu(false);
-        const result = await capturePhoto();
-        if (result) {
-            const file = new File([result.blob], "photo.jpg", { type: result.blob.type });
-            await processImageFile(file);
-        }
-    }, [capturePhoto, processImageFile]);
 
-    const handleNativeOCR = useCallback(async () => {
-        setShowCameraMenu(false);
-
-        const result = await capturePhoto();
-        if (result) {
-            const file = new File([result.blob], "ocr.jpg", { type: result.blob.type });
-            await handleOCR(file);
-        }
-    }, [capturePhoto, handleOCR]);
 
     // ============ BUTTON HANDLERS ============
     const handleMicButtonClick = useCallback(() => {
@@ -1202,17 +1105,17 @@ export function JournalEditor({
                         <div className="relative" ref={cameraMenuRef}>
                             <button
                                 onClick={handleCameraButtonClick}
-                                disabled={isUploading || isProcessingOCR || isCameraProcessing}
+                                disabled={isUploading || isProcessingOCR}
                                 className={cn(
                                     "group p-4 rounded-full transition-all duration-300",
-                                    isProcessingOCR || isCameraProcessing
+                                    isProcessingOCR
                                         ? "bg-blue-500/20"
                                         : showCameraMenu
                                             ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700"
                                             : "hover:bg-black/5 dark:hover:bg-white/10"
                                 )}
                             >
-                                {isProcessingOCR || isCameraProcessing || isUploading ? (
+                                {isProcessingOCR || isUploading ? (
                                     <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
                                 ) : (
                                     <Camera className={cn("w-6 h-6 text-zinc-600", hoverClass)} />
@@ -1225,11 +1128,7 @@ export function JournalEditor({
                                     <button
                                         onClick={() => {
                                             setShowCameraMenu(false);
-                                            if (Capacitor.isNativePlatform()) {
-                                                handleNativePhoto();
-                                            } else {
-                                                fileInputRef.current?.click();
-                                            }
+                                            fileInputRef.current?.click();
                                         }}
                                         className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
                                     >
@@ -1247,11 +1146,7 @@ export function JournalEditor({
                                     <button
                                         onClick={() => {
                                             setShowCameraMenu(false);
-                                            if (Capacitor.isNativePlatform()) {
-                                                handleNativeOCR();
-                                            } else {
-                                                ocrFileInputRef.current?.click();
-                                            }
+                                            ocrFileInputRef.current?.click();
                                         }}
                                         className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
                                     >

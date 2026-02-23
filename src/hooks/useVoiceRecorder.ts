@@ -1,6 +1,4 @@
 import { useState, useRef, useCallback } from 'react';
-import { Capacitor } from '@capacitor/core';
-import * as nativeMedia from '@/utils/native-media';
 
 interface RecorderState {
     isRecording: boolean;
@@ -18,7 +16,7 @@ export function useVoiceRecorder() {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
     const streamRef = useRef<MediaStream | null>(null);
-    const timerRef = useRef<NodeJS.Timeout | null>(null);
+    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const mimeTypeRef = useRef<string>('audio/webm');
     const resolveStopRef = useRef<((blob: Blob) => void) | null>(null);
 
@@ -38,28 +36,6 @@ export function useVoiceRecorder() {
     const start = useCallback(async (): Promise<void> => {
         setState({ isRecording: false, duration: 0, error: null });
 
-        // Native platform
-        if (Capacitor.isNativePlatform() && nativeMedia.isNative()) {
-            try {
-                const hasPermission = await nativeMedia.nativeVoice.requestPermission();
-                if (!hasPermission) {
-                    setState(s => ({ ...s, error: 'Microphone permission denied' }));
-                    return;
-                }
-                await nativeMedia.nativeVoice.start();
-                setState({ isRecording: true, duration: 0, error: null });
-
-                timerRef.current = setInterval(() => {
-                    setState(s => ({ ...s, duration: s.duration + 1 }));
-                }, 1000);
-                return;
-            } catch (e: any) {
-                setState(s => ({ ...s, error: e.message || 'Failed to start recording' }));
-                return;
-            }
-        }
-
-        // Web platform
         if (!navigator.mediaDevices?.getUserMedia) {
             setState(s => ({ ...s, error: 'Audio recording not supported' }));
             return;
@@ -128,23 +104,6 @@ export function useVoiceRecorder() {
                 return;
             }
 
-            // Native platform
-            if (Capacitor.isNativePlatform() && nativeMedia.isNative()) {
-                if (timerRef.current) {
-                    clearInterval(timerRef.current);
-                    timerRef.current = null;
-                }
-                const result = await nativeMedia.nativeVoice.stop();
-                setState({ isRecording: false, duration: 0, error: null });
-                // Return result directly if it has duration, but here we just return blob for compatibility
-                // Logic in JournalEditor handles the duration from native result if needed, 
-                // but this hook signature returns Blob | null. 
-                // We'll trust the nativeMedia return type.
-                resolve(result?.blob || null);
-                return;
-            }
-
-            // Web platform
             if (mediaRecorderRef.current?.state === 'recording') {
                 resolveStopRef.current = resolve;
                 mediaRecorderRef.current.stop();

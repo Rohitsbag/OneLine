@@ -7,7 +7,7 @@ import { supabase } from "@/utils/supabase/client";
 export const getEternalSignedUrl = async (path: string | null): Promise<string | null> => {
     if (!path) return null;
     // Return early if it's already a full URL or local path
-    if (path.startsWith('http') || path.startsWith('blob:') || path.startsWith('local://')) return path;
+    if (path.startsWith('http') || path.startsWith('blob:')) return path;
 
     try {
         // 100 years expiration

@@ -1,6 +1,5 @@
 import { Storage, STORAGE_KEYS } from './storage';
 import { supabase } from './supabase/client';
-import { Filesystem, Directory } from '@capacitor/filesystem';
 
 interface PendingOperation {
     id: string;
@@ -106,55 +105,51 @@ export const OfflineQueue = {
 
         for (const media of pending) {
             try {
-                // Read local file
-                const fileData = await Filesystem.readFile({
-                    path: media.localPath.replace('local://', ''),
-                    directory: Directory.Data
-                });
-
-                // Convert base64 to blob
-                const base64 = fileData.data as string;
-                const mimeType = media.type === 'image' ? 'image/webp' :
-                    media.type === 'audio' ? 'audio/webm' : 'video/mp4';
-
-                const byteCharacters = atob(base64);
-                const byteNumbers = new Array(byteCharacters.length);
-                for (let i = 0; i < byteCharacters.length; i++) {
-                    byteNumbers[i] = byteCharacters.charCodeAt(i);
-                }
-                const blob = new Blob([new Uint8Array(byteNumbers)], { type: mimeType });
-
-                // Upload to Supabase
-                const { error } = await supabase.storage
-                    .from('journal-media-private')
-                    .upload(media.remotePath, blob);
-
-                if (error) throw error;
-
-                // Update entry to replace local:// URL with remote path
-                const entryKey = STORAGE_KEYS.ENTRY_CACHE(userId, media.entryDate);
-                const entry = await Storage.getJSON<any>(entryKey);
-                if (entry?.media_items) {
-                    entry.media_items = entry.media_items.map((item: any) =>
-                        item.url === media.localPath
-                            ? { ...item, url: media.remotePath }
-                            : item
-                    );
-                    await Storage.setJSON(entryKey, entry);
-
-                    // Also update in database
-                    await supabase
-                        .from('entries')
-                        .update({ media_items: entry.media_items })
-                        .eq('user_id', userId)
-                        .eq('date', media.entryDate);
+                // On web, offline media uses blob: URLs which are session-only
+                // Skip items with local:// paths (native-only, no longer applicable)
+                if (media.localPath.startsWith('local://')) {
+                    console.warn('Skipping native local file (no longer supported):', media.localPath);
+                    continue;
                 }
 
-                // Delete local file
-                await Filesystem.deleteFile({
-                    path: media.localPath.replace('local://', ''),
-                    directory: Directory.Data
-                }).catch(() => { });
+                // For blob: URLs, try to fetch and upload
+                if (media.localPath.startsWith('blob:')) {
+                    try {
+                        const response = await fetch(media.localPath);
+                        const blob = await response.blob();
+
+                        const { error } = await supabase.storage
+                            .from('journal-media-private')
+                            .upload(media.remotePath, blob);
+
+                        if (error) throw error;
+
+                        // Update entry to replace blob: URL with remote path
+                        const entryKey = STORAGE_KEYS.ENTRY_CACHE(userId, media.entryDate);
+                        const entry = await Storage.getJSON<any>(entryKey);
+                        if (entry?.media_items) {
+                            entry.media_items = entry.media_items.map((item: any) =>
+                                item.url === media.localPath
+                                    ? { ...item, url: media.remotePath }
+                                    : item
+                            );
+                            await Storage.setJSON(entryKey, entry);
+
+                            await supabase
+                                .from('entries')
+                                .update({ media_items: entry.media_items })
+                                .eq('user_id', userId)
+                                .eq('date', media.entryDate);
+                        }
+                    } catch (fetchErr) {
+                        // blob: URL may have been revoked (page reload)
+                        console.warn('Could not fetch blob URL (likely expired):', media.localPath);
+                    }
+                    continue;
+                }
+
+                // For remote URLs, upload directly
+                remaining.push(media);
 
             } catch (e) {
                 console.error('Media upload failed:', media.localPath, e);

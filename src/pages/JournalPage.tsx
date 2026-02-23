@@ -118,32 +118,10 @@ export function JournalPage() {
         }
     };
 
-    const scheduleNotifications = async (enabled: boolean, timeStr?: string) => {
-        try {
-            const { LocalNotifications } = await import('@capacitor/local-notifications');
-            await LocalNotifications.cancel({ notifications: [{ id: 1 }] });
-
-            if (enabled) {
-                const targetTime = timeStr || settings.notification_time;
-                const [hour, minute] = targetTime.split(':').map(Number);
-                const permission = await LocalNotifications.requestPermissions();
-                if (permission.display === 'granted') {
-                    await LocalNotifications.schedule({
-                        notifications: [
-                            {
-                                id: 1,
-                                title: "Time for your OneLine",
-                                body: "Capture your thought for today.",
-                                schedule: { allowWhileIdle: true, every: 'day', on: { hour, minute } },
-                                smallIcon: "ic_stat_oneline",
-                            }
-                        ]
-                    });
-                }
-            }
-        } catch (e) {
-            console.error("Local Notifications error:", e);
-        }
+    const scheduleNotifications = async (_enabled: boolean, _timeStr?: string) => {
+        // Browser notification scheduling requires a service worker (future enhancement).
+        // Permission is requested in SettingsOverlay via the Web Notification API.
+        console.info('[Notifications] Browser push scheduling not yet implemented');
     };
 
     // --------------------------------------------------------------------------------

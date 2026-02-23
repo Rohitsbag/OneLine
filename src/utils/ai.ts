@@ -6,7 +6,7 @@
 import { startOfWeek, endOfWeek, format } from 'date-fns';
 import { supabase } from "@/utils/supabase/client";
 
-// Use full URL for Android APK compatibility (relative URLs don't work in Capacitor)
+// Vercel API route for AI proxy (server-side key)
 const AI_PROXY_URL = `https://get-one-line.vercel.app/api/ai-proxy`;
 
 async function callAIProxy(body: any, signal?: AbortSignal): Promise<string> {

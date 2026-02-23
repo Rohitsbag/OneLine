@@ -3,12 +3,10 @@ import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { supabase } from "@/utils/supabase/client";
 import { useNavigate } from "react-router-dom";
-import { Capacitor } from "@capacitor/core";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { useToast } from "./Toast";
 import { TimePicker } from "./ui/time-picker";
 import { parse, format } from "date-fns";
-import { requestNotificationPermission, scheduleDailyReminder, cancelDailyReminder } from "@/utils/notifications";
 import { STT_LANGUAGES } from "@/constants/languages";
 import { ApiKeysSection } from "./ApiKeysSection";
 
@@ -266,18 +264,17 @@ export function SettingsOverlay({
                                     onClick={async () => {
                                         const newValue = !notificationsEnabled;
                                         if (newValue) {
-                                            // Request permission first
-                                            const granted = await requestNotificationPermission();
-                                            if (!granted && Capacitor.isNativePlatform()) {
-                                                showToast("Please enable notifications in your device settings", "warning");
+                                            // Request browser notification permission
+                                            if ('Notification' in window) {
+                                                const perm = await Notification.requestPermission();
+                                                if (perm !== 'granted') {
+                                                    showToast("Please enable notifications in your browser settings", "warning");
+                                                    return;
+                                                }
+                                            } else {
+                                                showToast("Notifications not supported in this browser", "warning");
                                                 return;
                                             }
-                                            // Schedule the notification
-                                            const [hour, minute] = (notificationTime || "20:00").split(':').map(Number);
-                                            await scheduleDailyReminder(hour, minute);
-                                        } else {
-                                            // Cancel the notification
-                                            await cancelDailyReminder();
                                         }
                                         onToggleNotifications?.(newValue);
                                     }}
@@ -302,11 +299,6 @@ export function SettingsOverlay({
                                             if (date && !isNaN(date.getTime())) {
                                                 const timeStr = format(date, "HH:mm");
                                                 onTimeChange?.(timeStr);
-                                                // Reschedule notification with new time
-                                                if (notificationsEnabled) {
-                                                    const [hour, minute] = timeStr.split(':').map(Number);
-                                                    await scheduleDailyReminder(hour, minute);
-                                                }
                                             }
                                         }}
                                     />
