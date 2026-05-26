@@ -1,941 +1,717 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import {
-    ChevronLeft, ChevronRight, Mic, Camera, Video, Square,
-    AudioLines, ScanText, Loader2, Trash2, Sparkles, WifiOff
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Sparkles, Image as ImageIcon, Mic, Trash2, Play, Pause } from "lucide-react";
 import { format, addDays, subDays, isSameDay } from "date-fns";
 import { supabase } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
-import { compressImage } from "@/utils/image";
-import { transcribeAudio } from "@/utils/ai";
-import { AudioPlayer } from "./AudioPlayer";
 import { ACCENT_COLORS } from "@/constants/colors";
-import { useToast } from "./Toast";
-import { MediaItem, canAddMedia } from "@/types/media";
 import { Storage, STORAGE_KEYS } from "@/utils/storage";
-import { OfflineQueue } from "@/utils/offlineQueue";
 import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 import { useAuth } from "@/hooks/useAuth";
-import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
-import { useMemoryLane } from "@/hooks/useMemoryLane";
-import { useTTS } from "@/hooks/useTTS";
-import { MemoryLaneControls } from "./MemoryLaneControls";
-
-// Configuration
-const CONFIG = {
-    AUTOSAVE_DEBOUNCE_MS: 3000,
-    IMAGE_MAX_SIZE_MB: 1.5,
-    IMAGE_MAX_DIMENSION: 1500,
-    MAX_RECORDING_DURATION_SECONDS: 300,
-    VISIBILITY_REFRESH_DEBOUNCE_MS: 60000,
-};
+import { callGemini } from "@/utils/ai";
+import { compressImageFile, uploadToSupabase, resolveMediaUrl } from "@/utils/media";
 
 interface JournalEditorProps {
     date: Date;
     onDateChange: (date: Date) => void;
     minDate?: Date;
     accentColor?: string;
-    isGuest?: boolean;
-    onGuestAction?: () => void;
     refreshTrigger?: number;
-    sttLanguage?: string;
-    aiRewriteEnabled?: boolean;
-    mediaDisplayMode?: 'grid' | 'swipe' | 'scroll';
-    readingMode?: boolean;
-    isMemoryLaneActive?: boolean;
-    onMemoryLaneClose?: () => void;
 }
 
-// Sub-component for rendering media items
-const MediaItemView = ({ item, accentColor, onError }: {
-    item: MediaItem;
-    accentColor?: string;
-    onError?: () => void;
-}) => {
-    const [url, setUrl] = useState<string | null>(null);
-    const [error, setError] = useState(false);
-    const isMounted = useRef(true);
+interface MediaItem {
+    type: "image" | "audio";
+    url: string;
+    originalUrl?: string;
+    duration?: number;
+}
 
-    useEffect(() => {
-        isMounted.current = true;
-        const load = async () => {
-            // Direct URLs (http, data, blob)
-            if (item.url.startsWith('http') || item.url.startsWith('data:') || item.url.startsWith('blob:')) {
-                setUrl(item.url);
-                return;
+/**
+ * Reusable, premium HTML5 custom audio player card.
+ * Integrates flawlessly with active system accent themes and dark mode layouts.
+ */
+export function CustomAudioPlayer({
+    url,
+    onRemove,
+    accentColor,
+    knownDuration,
+}: {
+    url: string;
+    onRemove?: () => void;
+    accentColor: string;
+    knownDuration?: number;
+}) {
+    const audioRef = useRef<HTMLAudioElement>(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [currentTime, setCurrentTime] = useState("0:00");
+    const [durationStr, setDurationStr] = useState("");
+    const [isEnded, setIsEnded] = useState(false);
+
+    const accentObj = ACCENT_COLORS.find((a) => a.bgClass === accentColor) || ACCENT_COLORS[0];
+
+    const formatTime = (secs: number) => {
+        if (isNaN(secs) || !isFinite(secs) || secs < 0) return "0:00";
+        const m = Math.floor(secs / 60);
+        const s = Math.floor(secs % 60).toString().padStart(2, "0");
+        return `${m}:${s}`;
+    };
+
+    const togglePlay = () => {
+        if (!audioRef.current) return;
+        if (isPlaying) {
+            audioRef.current.pause();
+        } else {
+            if (audioRef.current.ended || isEnded) {
+                audioRef.current.currentTime = 0;
+                setIsEnded(false);
             }
+            audioRef.current.play().catch((e) => console.error("Audio play error:", e));
+        }
+    };
 
-            // Supabase storage paths - get signed URL
-            try {
-                const { data, error: signError } = await supabase.storage
-                    .from('journal-media-private')
-                    .createSignedUrl(item.url, 60 * 60 * 24 * 7);
+    const [durationHackRunning, setDurationHackRunning] = useState(false);
 
-                if (signError || !data?.signedUrl) {
-                    throw signError;
-                }
-                if (isMounted.current) setUrl(data.signedUrl);
-            } catch (e) {
-                console.error("Signed URL failed:", e);
-                if (isMounted.current) setError(true);
+    // Watch for duration changes (this fires when the hack completes and Chrome discovers the true length)
+    useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        const handleDurationChange = () => {
+            if (audio.duration && isFinite(audio.duration) && !durationStr) {
+                setDurationStr(formatTime(audio.duration));
             }
         };
+        audio.addEventListener('durationchange', handleDurationChange);
+        return () => audio.removeEventListener('durationchange', handleDurationChange);
+    }, [durationStr]);
 
-        load();
-        return () => { isMounted.current = false; };
-    }, [item.url, item.type, onError]);
+    const handleTimeUpdate = () => {
+        if (!audioRef.current || durationHackRunning) return;
+        const cur = audioRef.current.currentTime;
+        const dur = (audioRef.current.duration && isFinite(audioRef.current.duration)) 
+            ? audioRef.current.duration 
+            : knownDuration || 0;
+            
+        setCurrentTime(formatTime(cur));
+        if (dur && dur > 0) {
+            setProgress((cur / dur) * 100);
+        } else {
+            setProgress(0);
+        }
+    };
 
-    if (error) {
-        return (
-            <div className="flex items-center justify-center w-full h-full bg-zinc-100 dark:bg-zinc-800 text-xs text-red-500">
-                Failed to load
+    const handleLoadedMetadata = () => {
+        if (!audioRef.current) return;
+        const dur = audioRef.current.duration;
+        if (dur && isFinite(dur)) {
+            setDurationStr(formatTime(dur));
+        } else if (!knownDuration && !durationHackRunning) {
+            // WebM Infinity duration workaround: seek to the end so browser calculates true duration
+            setDurationHackRunning(true);
+            audioRef.current.currentTime = 1e8; // seek to end
+            const onSeeked = () => {
+                if (audioRef.current) {
+                    audioRef.current.currentTime = 0; // return to start
+                    audioRef.current.removeEventListener('seeked', onSeeked);
+                }
+                setDurationHackRunning(false);
+            };
+            audioRef.current.addEventListener('seeked', onSeeked);
+        }
+    };
+
+    const handleEnded = () => {
+        setIsPlaying(false);
+        setIsEnded(true);
+        setProgress(0);
+        setCurrentTime("0:00");
+        if (audioRef.current) {
+            audioRef.current.currentTime = 0;
+        }
+    };
+
+    const handleScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!audioRef.current) return;
+        const pct = parseFloat(e.target.value);
+        const dur = (audioRef.current.duration && isFinite(audioRef.current.duration)) 
+            ? audioRef.current.duration 
+            : knownDuration || 0;
+            
+        if (dur && dur > 0) {
+            audioRef.current.currentTime = (pct / 100) * dur;
+            setProgress(pct);
+        }
+    };
+
+    const effectiveDurationStr = durationStr || (knownDuration ? formatTime(knownDuration) : "");
+    const showDuration = effectiveDurationStr && effectiveDurationStr !== "0:00" && !effectiveDurationStr.includes("NaN");
+
+    // Determine what to show in the time label
+    let timeLabel = currentTime;
+    if (showDuration) {
+        if (!isPlaying && progress === 0) {
+            timeLabel = effectiveDurationStr; // Show only duration before they start playing
+        } else {
+            timeLabel = `${currentTime} / ${effectiveDurationStr}`; // Show both during playback
+        }
+    }
+
+    return (
+        <div className="w-full max-w-md relative group rounded-[24px] border border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2 pr-4 flex items-center gap-3 shadow-sm hover:shadow-md transition-all duration-300 animate-in fade-in shrink-0">
+            {/* Custom Range Slider Stylesheet */}
+            <style>{`
+                .custom-seekbar {
+                    -webkit-appearance: none;
+                    appearance: none;
+                    background: transparent;
+                    width: 100%;
+                    height: 24px;
+                    cursor: pointer;
+                }
+                .custom-seekbar:focus {
+                    outline: none;
+                }
+                .custom-seekbar::-webkit-slider-runnable-track {
+                    width: 100%;
+                    height: 4px;
+                    background: #e4e4e7;
+                    border-radius: 2px;
+                }
+                .dark .custom-seekbar::-webkit-slider-runnable-track {
+                    background: #27272a;
+                }
+                .custom-seekbar::-webkit-slider-thumb {
+                    height: 12px;
+                    width: 12px;
+                    border-radius: 50%;
+                    background: currentColor;
+                    -webkit-appearance: none;
+                    margin-top: -4px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    transition: transform 0.1s ease;
+                }
+                .custom-seekbar::-webkit-slider-thumb:hover {
+                    transform: scale(1.25);
+                }
+            `}</style>
+
+            <audio
+                ref={audioRef}
+                src={url}
+                onPlay={() => { setIsPlaying(true); setIsEnded(false); }}
+                onPause={() => setIsPlaying(false)}
+                onTimeUpdate={handleTimeUpdate}
+                onLoadedMetadata={handleLoadedMetadata}
+                onEnded={handleEnded}
+            />
+
+            {/* Play Button */}
+            <button
+                onClick={togglePlay}
+                className={cn(
+                    "w-10 h-10 rounded-full flex items-center justify-center text-white shadow-sm transition-transform active:scale-95 shrink-0",
+                    accentObj.bgClass,
+                    accentObj.hoverBgClass
+                )}
+            >
+                {isPlaying ? (
+                    <Pause className="w-4 h-4 fill-white text-white shrink-0" />
+                ) : (
+                    <Play className="w-4 h-4 fill-white text-white translate-x-0.5 shrink-0" />
+                )}
+            </button>
+
+            {/* Scrubber & Time */}
+            <div className="flex-1 min-w-0 flex items-center gap-3">
+                <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={progress}
+                    onChange={handleScrub}
+                    disabled={!showDuration}
+                    className={cn("custom-seekbar", accentObj.class, !showDuration && "opacity-50 cursor-not-allowed")}
+                />
+                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 font-mono min-w-[32px] text-right shrink-0 whitespace-nowrap">
+                    {timeLabel}
+                </span>
             </div>
-        );
-    }
 
-    if (!url) {
-        return (
-            <div className="flex items-center justify-center w-full h-full bg-zinc-100 dark:bg-zinc-800">
-                <Loader2 className="w-4 h-4 animate-spin text-zinc-400" />
-            </div>
-        );
-    }
-
-    if (item.type === 'image') {
-        return <img src={url} alt="Media" className="w-full h-full object-cover" />;
-    }
-
-    if (item.type === 'video') {
-        return (
-            <video src={url} controls className="w-full h-full object-cover">
-                Your browser doesn't support video playback.
-            </video>
-        );
-    }
-
-    if (item.type === 'audio') {
-        return <AudioPlayer src={url} accentColor={accentColor} />;
-    }
-
-    return null;
-};
+            {/* Remove Button */}
+            {onRemove && (
+                <button
+                    onClick={onRemove}
+                    className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-red-50 dark:hover:bg-red-950/30 text-zinc-400 hover:text-red-500 transition-colors shrink-0 active:scale-90"
+                    title="Remove voice note"
+                >
+                    <Trash2 className="w-4 h-4 shrink-0" />
+                </button>
+            )}
+        </div>
+    );
+}
 
 export function JournalEditor({
     date,
     onDateChange,
     minDate,
     accentColor = "bg-indigo-500",
-    isGuest = false,
-    onGuestAction,
     refreshTrigger = 0,
-    sttLanguage = "Auto",
-    aiRewriteEnabled = false,
-    mediaDisplayMode = 'grid',
-    readingMode = false,
-    isMemoryLaneActive = false,
-    onMemoryLaneClose
 }: JournalEditorProps) {
-    const dateStr = format(date, 'yyyy-MM-dd');
-    const accentObj = ACCENT_COLORS.find(a => a.bgClass === accentColor) || ACCENT_COLORS[0];
-    const hoverClass = (accentObj as any).hoverTextClass || "group-hover:text-white";
+    const dateStr = format(date, "yyyy-MM-dd");
+    const accentObj = ACCENT_COLORS.find((a) => a.bgClass === accentColor) || ACCENT_COLORS[0];
+    const hoverClass = accentObj.hoverTextClass || "group-hover:text-zinc-900";
 
-    // ============ INFRASTRUCTURE ============
     const { connected: isOnline } = useNetworkStatus();
-    const { userId } = useAuth(isOnline);
-    const { showToast } = useToast();
-    const voiceRecorder = useVoiceRecorder();
+    const { userId } = useAuth();
+    const effectiveId = userId || "guest";
 
-    // ============ ENTRY STATE ============
     const [entryId, setEntryId] = useState<string | null>(null);
     const [content, setContent] = useState("");
-    const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
-
-    // ============ UI STATE ============
     const [isLoading, setIsLoading] = useState(true);
-    const [isSaving, setIsSaving] = useState(false);
-    const [isUploading, setIsUploading] = useState(false);
-    const [isTranscribing, setIsTranscribing] = useState(false);
-    const [isProcessingOCR, setIsProcessingOCR] = useState(false);
-    const [isRewriting, setIsRewriting] = useState(false);
-    const [showMicMenu, setShowMicMenu] = useState(false);
-    const [showCameraMenu, setShowCameraMenu] = useState(false);
-    const [isDragging, setIsDragging] = useState(false);
-    const [syncStatus, setSyncStatus] = useState<'synced' | 'local' | 'pending' | 'failed'>('synced');
+    const [syncStatus, setSyncStatus] = useState<"synced" | "saving" | "local" | "error">("synced");
 
-    // Transcription-specific state (different from voice note recording)
-    const [isTranscriptionRecording, setIsTranscriptionRecording] = useState(false);
+    // Media states
+    const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+    const [isLoadingMedia, setIsLoadingMedia] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
+    const [recordingTime, setRecordingTime] = useState(0);
 
-    // Memory Lane State
-    const [isMemoryLanePlaying, setIsMemoryLanePlaying] = useState(true);
+    // AI Refinement states
+    const [isRefining, setIsRefining] = useState(false);
+    const [refinedContent, setRefinedContent] = useState<string | null>(null);
+    const [showRefinedPreview, setShowRefinedPreview] = useState(false);
 
-    // ============ REFS ============
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
     const contentRef = useRef(content);
     const mediaItemsRef = useRef(mediaItems);
     const isDirtyRef = useRef(false);
-    const isMountedRef = useRef(true);
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const ocrFileInputRef = useRef<HTMLInputElement>(null);
-    // const videoFileInputRef = useRef<HTMLInputElement>(null);
-    const micMenuRef = useRef<HTMLDivElement>(null);
-    const cameraMenuRef = useRef<HTMLDivElement>(null);
-    const abortControllerRef = useRef<AbortController | null>(null);
+    const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const abortRef = useRef<AbortController | null>(null);
 
-    // Keep refs in sync
+    // Recording refs
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
+    const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
     useEffect(() => {
         contentRef.current = content;
+    }, [content]);
+
+    useEffect(() => {
         mediaItemsRef.current = mediaItems;
-    }, [content, mediaItems]);
+    }, [mediaItems]);
 
+    // Cleanup recording timer on unmount
     useEffect(() => {
-        isMountedRef.current = true;
-        return () => { isMountedRef.current = false; };
+        return () => {
+            if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+        };
     }, []);
 
-    // ============ MEMORY LANE HOOKS ============
-    const { isInteracting, settings: mlSettings, updateSettings: updateMlSettings } = useMemoryLane(
-        () => onDateChange(subDays(date, 1)), // Auto-advance goes to PAST
-        content.length,
-        isMemoryLanePlaying && isMemoryLaneActive,
-        setIsMemoryLanePlaying
-    );
+    // Helper to resolve all media items URLs to secure signed URLs
+    const resolveItemsUrls = async (items: MediaItem[]): Promise<MediaItem[]> => {
+        if (!items || items.length === 0) return [];
+        return Promise.all(
+            items.map(async (item) => ({
+                ...item,
+                url: await resolveMediaUrl(item.url),
+                originalUrl: item.originalUrl || item.url // keep reference of the persistent public URL
+            }))
+        );
+    };
 
-    const { voices: ttsVoices, isSpeaking, settings: ttsSettings, updateSettings: updateTtsSettings } = useTTS(
-        content,
-        isMemoryLanePlaying && isMemoryLaneActive,
-        isInteracting
-    );
-
-    // Auto-pause/play when Memory Lane toggles
-    useEffect(() => {
-        if (isMemoryLaneActive) setIsMemoryLanePlaying(true);
-        else setIsMemoryLanePlaying(false);
-    }, [isMemoryLaneActive]);
-
-    // ============ HAPTIC FEEDBACK ============
-    const triggerHaptic = useCallback(() => {
-        try {
-            if (navigator.vibrate) {
-                navigator.vibrate(10);
-            }
-        } catch (e) {
-            // Vibration not available
-        }
-    }, []);
-
-    // ============ DATA LOADING ============
-    const fetchEntry = useCallback(async () => {
-        if (!userId) return;
-
+    // ── LOAD ──────────────────────────────────────────────────────────────────
+    const loadEntry = useCallback(async () => {
         setIsLoading(true);
+        isDirtyRef.current = false;
+        setRefinedContent(null);
+        setShowRefinedPreview(false);
+        setIsRecording(false);
+        setRecordingTime(0);
 
-        // 1. Load from cache first (instant)
-        const cached = Storage.getJSONSync<any>(STORAGE_KEYS.ENTRY_CACHE(userId, dateStr));
-        if (cached) {
-            setContent(cached.content || "");
-            setMediaItems(cached.media_items || []);
-            setEntryId(cached.id || null);
-            setSyncStatus(cached._pending ? 'pending' : 'synced');
-        } else {
-            setContent("");
-            setMediaItems([]);
-            setEntryId(null);
-        }
+        // 1. Instant load from localStorage
+        const cached = Storage.getJSONSync<any>(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr));
+        setContent(cached?.content || "");
+        setEntryId(cached?.id || null);
+        
+        // Resolve cache URLs to valid signed URLs
+        const resolvedLocal = await resolveItemsUrls(cached?.media_items || []);
+        setMediaItems(resolvedLocal);
+        setSyncStatus("synced");
 
-        // 2. Fetch from server if online
-        if (isOnline) {
+        // 2. Refresh from Supabase (if logged in + online)
+        if (userId && isOnline) {
             try {
-                if (abortControllerRef.current) {
-                    abortControllerRef.current.abort();
-                }
-                abortControllerRef.current = new AbortController();
+                abortRef.current?.abort();
+                abortRef.current = new AbortController();
 
                 const { data, error } = await supabase
-                    .from('entries')
-                    .select('id, content, media_items, updated_at')
-                    .eq('user_id', userId)
-                    .eq('date', dateStr)
-                    .abortSignal(abortControllerRef.current.signal)
+                    .from("entries")
+                    .select("id, content, media_items, updated_at")
+                    .eq("user_id", userId)
+                    .eq("date", dateStr)
+                    .abortSignal(abortRef.current.signal)
                     .maybeSingle();
 
                 if (!error && data && !isDirtyRef.current) {
                     setContent(data.content || "");
-                    setMediaItems(data.media_items || []);
                     setEntryId(data.id);
-                    setSyncStatus('synced');
-                    await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(userId, dateStr), data);
+                    
+                    // Resolve public Supabase URLs to secure signed URLs
+                    const resolvedServer = await resolveItemsUrls(data.media_items || []);
+                    setMediaItems(resolvedServer);
+                    setSyncStatus("synced");
+                    Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr), data);
                 }
             } catch (e: any) {
-                if (e.name !== 'AbortError') {
-                    console.error("Fetch error:", e);
-                }
+                if (e.name !== "AbortError") console.error("[Editor] Load error:", e);
             }
         }
 
         setIsLoading(false);
-    }, [userId, dateStr, isOnline]);
+    }, [effectiveId, userId, dateStr, isOnline]);
 
     useEffect(() => {
-        fetchEntry();
-        return () => {
-            if (abortControllerRef.current) {
-                abortControllerRef.current.abort();
-            }
-        };
-    }, [fetchEntry, refreshTrigger]);
+        loadEntry();
+        return () => { abortRef.current?.abort(); };
+    }, [loadEntry, refreshTrigger]);
 
-    // ============ DATA SAVING ============
+    // ── SAVE ──────────────────────────────────────────────────────────────────
     const saveEntry = useCallback(async () => {
-        if (!userId || !isMountedRef.current) return;
+        const text = contentRef.current;
+        
+        // Persist original public URLs in the database, not temporary signed ones
+        const items = mediaItemsRef.current.map(item => ({
+            type: item.type,
+            url: item.originalUrl || item.url,
+            ...(item.duration ? { duration: item.duration } : {})
+        }));
 
-        const currentContent = contentRef.current;
-        const currentMedia = mediaItemsRef.current;
+        // Always write to localStorage first
+        const localRecord = {
+            id: entryId,
+            content: text,
+            date: dateStr,
+            media_items: items,
+            updated_at: new Date().toISOString(),
+        };
+        await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr), localRecord);
 
-        setIsSaving(true);
+        if (!userId || !isOnline) {
+            setSyncStatus("local");
+            isDirtyRef.current = false;
+            return;
+        }
+
+        // Then sync to Supabase
+        try {
+            if (entryId) {
+                const { error } = await supabase
+                    .from("entries")
+                    .update({ 
+                        content: text, 
+                        media_items: items,
+                        updated_at: new Date().toISOString() 
+                    })
+                    .eq("id", entryId);
+                if (error) throw error;
+            } else {
+                const { data, error } = await supabase
+                    .from("entries")
+                    .upsert(
+                        { 
+                            user_id: userId, 
+                            date: dateStr, 
+                            content: text, 
+                            media_items: items,
+                            updated_at: new Date().toISOString() 
+                        },
+                        { onConflict: "user_id,date" }
+                    )
+                    .select("id")
+                    .single();
+                if (error) throw error;
+                if (data?.id) {
+                    setEntryId(data.id);
+                    await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr), {
+                        ...localRecord,
+                        id: data.id,
+                    });
+                }
+            }
+            setSyncStatus("synced");
+        } catch {
+            setSyncStatus("error");
+        }
+
+        isDirtyRef.current = false;
+    }, [effectiveId, userId, dateStr, entryId, isOnline]);
+
+    // ── AUTOSAVE ──────────────────────────────────────────────────────────────
+    const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setContent(e.target.value);
+        isDirtyRef.current = true;
+        setSyncStatus("saving");
+
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(saveEntry, 1500);
+    };
+
+    // Save on unmount if dirty
+    useEffect(() => {
+        return () => {
+            if (isDirtyRef.current) saveEntry();
+            if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        };
+    }, [saveEntry]);
+
+    // Auto-resize textarea
+    useEffect(() => {
+        const ta = textareaRef.current;
+        if (!ta) return;
+        ta.style.height = "auto";
+        ta.style.height = `${ta.scrollHeight}px`;
+    }, [content]);
+
+    // ── MEDIA OPERATIONS ──────────────────────────────────────────────────────
+    const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        if (mediaItems.some(item => item.type === "image")) {
+            alert("Only one photo is allowed. Please remove the existing photo first.");
+            return;
+        }
+
+        setIsLoadingMedia(true);
+        try {
+            // Compress image client-side to target <1.5MB
+            const compressed = await compressImageFile(file);
+
+            let uploadUrl = "";
+            let displayUrl = "";
+            if (userId && userId !== "guest" && isOnline) {
+                uploadUrl = await uploadToSupabase(compressed, userId, dateStr, "image");
+                displayUrl = await resolveMediaUrl(uploadUrl);
+            } else {
+                uploadUrl = URL.createObjectURL(compressed);
+                displayUrl = uploadUrl;
+                if (!userId) {
+                    alert("Guest Mode: Sign in to permanently save and sync your attached photo.");
+                }
+            }
+
+            const nextItems = [...mediaItems, { type: "image" as const, url: displayUrl, originalUrl: uploadUrl }];
+            setMediaItems(nextItems);
+
+            // Trigger silent save
+            isDirtyRef.current = true;
+            setSyncStatus("saving");
+            setTimeout(saveEntry, 100);
+
+        } catch (err: any) {
+            console.error("[media] Image processing error:", err);
+            alert(`Failed to add photo: ${err.message || "Please try again."}`);
+        } finally {
+            setIsLoadingMedia(false);
+            e.target.value = ""; // clear selector
+        }
+    };
+
+    const startRecording = async () => {
+        if (mediaItems.some(item => item.type === "audio")) {
+            alert("Only one voiceover is allowed. Please remove the existing voiceover first.");
+            return;
+        }
 
         try {
-            const entryData = {
-                id: entryId,
-                content: currentContent,
-                media_items: currentMedia,
-                updated_at: new Date().toISOString(),
-                _pending: !isOnline
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioChunksRef.current = [];
+
+            // Configure compressed Opus capturing
+            let options = {};
+            if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+                options = { mimeType: "audio/webm;codecs=opus", audioBitsPerSecond: 64000 };
+            }
+
+            const recorder = new MediaRecorder(stream, options);
+            mediaRecorderRef.current = recorder;
+
+            recorder.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) {
+                    audioChunksRef.current.push(e.data);
+                }
             };
 
-            // Always save to local cache first
-            await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(userId, dateStr), entryData);
+            const startTime = Date.now();
+            recorder.onstop = async () => {
+                const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
+                const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+                stream.getTracks().forEach(track => track.stop()); // release micro
 
-            if (isOnline) {
-                // Try to save to server
-                if (entryId) {
-                    const { error } = await supabase
-                        .from('entries')
-                        .update({
-                            content: currentContent,
-                            media_items: currentMedia,
-                            updated_at: new Date().toISOString()
-                        })
-                        .eq('id', entryId);
-
-                    if (error) throw error;
-                    setSyncStatus('synced');
-                } else {
-                    const { data, error } = await supabase
-                        .from('entries')
-                        .upsert({
-                            user_id: userId,
-                            date: dateStr,
-                            content: currentContent,
-                            media_items: currentMedia,
-                            updated_at: new Date().toISOString()
-                        }, { onConflict: 'user_id,date' })
-                        .select('id')
-                        .single();
-
-                    if (error) throw error;
-                    if (data?.id) setEntryId(data.id);
-                    setSyncStatus('synced');
-                }
-
-                // Update cache without pending flag
-                await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(userId, dateStr), {
-                    ...entryData,
-                    _pending: false
-                });
-            } else {
-                // Queue for later sync
-                await OfflineQueue.add(userId, {
-                    type: 'upsert_entry',
-                    table: 'entries',
-                    data: {
-                        user_id: userId,
-                        date: dateStr,
-                        content: currentContent,
-                        media_items: currentMedia,
-                        updated_at: new Date().toISOString()
+                setIsLoadingMedia(true);
+                try {
+                    let uploadUrl = "";
+                    let displayUrl = "";
+                    if (userId && userId !== "guest" && isOnline) {
+                        uploadUrl = await uploadToSupabase(audioBlob, userId, dateStr, "audio");
+                        displayUrl = await resolveMediaUrl(uploadUrl);
+                    } else {
+                        uploadUrl = URL.createObjectURL(audioBlob);
+                        displayUrl = uploadUrl;
+                        if (!userId) {
+                            alert("Guest Mode: Sign in to permanently save and sync your voiceover.");
+                        }
                     }
-                });
-                setSyncStatus('pending');
-            }
 
-            isDirtyRef.current = false;
-        } catch (e) {
-            console.error("Save failed:", e);
-            setSyncStatus('failed');
-
-            // Fallback to queue
-            await OfflineQueue.add(userId, {
-                type: 'upsert_entry',
-                table: 'entries',
-                data: {
-                    user_id: userId,
-                    date: dateStr,
-                    content: contentRef.current,
-                    media_items: mediaItemsRef.current,
-                    updated_at: new Date().toISOString()
+                    setMediaItems(prev => {
+                        const next = [...prev, { type: "audio" as const, url: displayUrl, originalUrl: uploadUrl, duration: durationSeconds }];
+                        isDirtyRef.current = true;
+                        setSyncStatus("saving");
+                        setTimeout(saveEntry, 100);
+                        return next;
+                    });
+                } catch (err: any) {
+                    console.error("[media] Audio upload error:", err);
+                    alert(`Failed to save voiceover: ${err.message || "Please check Supabase configurations."}`);
+                } finally {
+                    setIsLoadingMedia(false);
                 }
-            });
-        } finally {
-            if (isMountedRef.current) setIsSaving(false);
+            };
+
+            recorder.start(250);
+            setIsRecording(true);
+            setRecordingTime(0);
+
+            if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+            recordingTimerRef.current = setInterval(() => {
+                setRecordingTime(prev => {
+                    if (prev >= 299) { // 5-minute cap (300 seconds)
+                        stopRecording();
+                        return 300;
+                    }
+                    return prev + 1;
+                });
+            }, 1000);
+
+        } catch (err) {
+            console.error("[recorder] Permission denied:", err);
+            alert("Unable to access microphone. Please enable browser permissions.");
         }
-    }, [userId, dateStr, entryId, isOnline]);
+    };
 
-    // Autosave effect
-    useEffect(() => {
-        if (isLoading || !userId) return;
-
-        isDirtyRef.current = true;
-        setSyncStatus(isOnline ? 'local' : 'pending');
-
-        const timer = setTimeout(() => {
-            if (isDirtyRef.current) {
-                saveEntry();
-            }
-        }, CONFIG.AUTOSAVE_DEBOUNCE_MS);
-
-        return () => {
-            clearTimeout(timer);
-        };
-    }, [content, mediaItems, userId, isLoading, isOnline, saveEntry]);
-
-    // Save on unmount
-    useEffect(() => {
-        return () => {
-            if (isDirtyRef.current && userId) {
-                saveEntry();
-            }
-        };
-    }, [userId, saveEntry]);
-
-    // ============ MEDIA HELPERS ============
-    const addMedia = useCallback((newItem: MediaItem): boolean => {
-        const validation = canAddMedia(mediaItems, newItem.type);
-        if (!validation.canAdd) {
-            showToast(validation.reason || 'Media limit reached', 'error');
-            return false;
+    const stopRecording = () => {
+        if (recordingTimerRef.current) {
+            clearInterval(recordingTimerRef.current);
+            recordingTimerRef.current = null;
         }
-        setMediaItems(prev => [...prev, newItem]);
-        isDirtyRef.current = true;
-        return true;
-    }, [mediaItems, showToast]);
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+            mediaRecorderRef.current.stop();
+        }
+        setIsRecording(false);
+    };
 
-    const removeMedia = useCallback(async (index: number) => {
-        const item = mediaItems[index];
+    const cancelRecording = () => {
+        if (recordingTimerRef.current) {
+            clearInterval(recordingTimerRef.current);
+            recordingTimerRef.current = null;
+        }
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+            mediaRecorderRef.current.onstop = null; // skip uploading logic
+            mediaRecorderRef.current.stop();
+            mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        }
+        setIsRecording(false);
+        setRecordingTime(0);
+        audioChunksRef.current = [];
+    };
+
+    const handleRemoveMedia = (type: "image" | "audio") => {
+        const item = mediaItems.find(i => i.type === type);
         if (!item) return;
 
-        // Optimistic remove
-        setMediaItems(prev => prev.filter((_, i) => i !== index));
+        if (item.url.startsWith("blob:")) {
+            URL.revokeObjectURL(item.url);
+        }
+
+        setMediaItems(prev => {
+            const next = prev.filter(i => i.type !== type);
+            isDirtyRef.current = true;
+            setSyncStatus("saving");
+            setTimeout(saveEntry, 100);
+            return next;
+        });
+    };
+
+    // ── AI REFINEMENT ─────────────────────────────────────────────────────────
+    const handleAiRefine = async () => {
+        if (!content.trim()) return;
+        setIsRefining(true);
+        try {
+            const prompt = `Politely clean up spelling, punctuation, grammar, and sentence flow of the following daily journal entry, while retaining the exact core message, tone, first-person perspective, and personal details. Do NOT summarize it or change its style to be overly verbose or artificial. Keep it natural, warm, and authentic.
+
+Journal Entry:
+"""
+${content}
+"""`;
+            const result = await callGemini(prompt);
+            if (result.trim()) {
+                setRefinedContent(result.trim());
+                setShowRefinedPreview(true);
+            }
+        } catch (e) {
+            console.error("[ai-refine] failed:", e);
+            alert("Failed to refine entry with AI. Please check your connection and try again.");
+        } finally {
+            setIsRefining(false);
+        }
+    };
+
+    const handleApplyRefine = () => {
+        if (!refinedContent) return;
+        setContent(refinedContent);
+        setShowRefinedPreview(false);
+
         isDirtyRef.current = true;
-
-        try {
-            // Revoke blob URLs to free memory
-            if (item.url.startsWith('blob:')) {
-                URL.revokeObjectURL(item.url);
-            } else if (!item.url.startsWith('http') && !item.url.startsWith('data:')) {
-                await supabase.storage
-                    .from('journal-media-private')
-                    .remove([item.url])
-                    .catch(e => console.warn("Remote delete failed:", e));
-            }
-        } catch (e) {
-            console.error("Delete error:", e);
-        }
-    }, [mediaItems]);
-
-    // ============ IMAGE UPLOAD ============
-    const processImageFile = useCallback(async (file: File) => {
-        if (!userId) {
-            showToast("Please wait for app to load", "warning");
-            return;
-        }
-
-        if (!file.type.startsWith('image/')) {
-            showToast("Invalid image file", "error");
-            return;
-        }
-
-        setIsUploading(true);
-
-        try {
-            const compressedBlob = await compressImage(file, CONFIG.IMAGE_MAX_SIZE_MB, CONFIG.IMAGE_MAX_DIMENSION);
-            if (!compressedBlob || compressedBlob.size === 0) {
-                throw new Error("Compression failed");
-            }
-
-            if (!isOnline) {
-                // Save as blob URL for offline (session-only, lost on reload)
-                const blobUrl = URL.createObjectURL(compressedBlob);
-
-                const remotePath = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.webp`;
-                await OfflineQueue.addPendingMedia(userId, {
-                    localPath: blobUrl,
-                    remotePath,
-                    type: 'image',
-                    entryDate: dateStr
-                });
-
-                addMedia({ type: 'image', url: blobUrl });
-                showToast("Image saved locally - will sync when online", "success");
-
-            } else {
-                // TRY ONLINE UPLOAD WITH FALLBACK
-                try {
-                    const uuid = crypto.randomUUID?.().slice(0, 8) || Math.random().toString(36).slice(2, 10);
-                    const fileName = `${userId}/${Date.now()}-${uuid}.webp`;
-
-                    const { error } = await supabase.storage
-                        .from('journal-media-private')
-                        .upload(fileName, compressedBlob);
-
-                    if (error) throw error;
-
-                    addMedia({ type: 'image', url: fileName });
-                    showToast("Image uploaded", "success");
-                } catch (uploadError) {
-                    console.warn("Online upload failed, falling back to offline save:", uploadError);
-
-                    // Fallback: save as blob URL (session-only)
-                    const blobUrl = URL.createObjectURL(compressedBlob);
-
-                    const remotePath = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.webp`;
-                    await OfflineQueue.addPendingMedia(userId, {
-                        localPath: blobUrl,
-                        remotePath,
-                        type: 'image',
-                        entryDate: dateStr
-                    });
-
-                    addMedia({ type: 'image', url: blobUrl });
-                    showToast("Saved offline (Upload failed)", "success");
-                }
-            }
-        } catch (e: any) {
-            console.error("Image upload failed:", e);
-            showToast("Upload failed: " + e.message, "error");
-        } finally {
-            setIsUploading(false);
-        }
-    }, [userId, dateStr, isOnline, addMedia, showToast]);
-
-    // ============ VIDEO UPLOAD (Disabled) ============
-    /*
-    const processVideoFile = useCallback(async (file: File) => {
-        if (!userId) return;
-
-        setIsUploading(true);
-
-        try {
-            if (!isOnline) {
-                // Save locally
-                const reader = new FileReader();
-                const base64Data = await new Promise<string>((resolve, reject) => {
-                    reader.onload = () => resolve(reader.result as string);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(file);
-                });
-
-                const ext = file.name.split('.').pop() || 'mp4';
-                const fileName = `offline-video-${Date.now()}.${ext}`;
-                await Filesystem.writeFile({
-                    path: fileName,
-                    data: base64Data.split(',')[1],
-                    directory: Directory.Data
-                });
-
-                const remotePath = `${userId}/video-${Date.now()}.${ext}`;
-                await OfflineQueue.addPendingMedia(userId, {
-                    localPath: `local://${fileName}`,
-                    remotePath,
-                    type: 'video',
-                    entryDate: dateStr
-                });
-
-                addMedia({ type: 'video', url: `local://${fileName}` });
-                showToast("Video saved locally", "success");
-            } else {
-                const ext = file.name.split('.').pop() || 'mp4';
-                const fileName = `${userId}/video-${Date.now()}.${ext}`;
-
-                const { error } = await supabase.storage
-                    .from('journal-media-private')
-                    .upload(fileName, file);
-
-                if (error) throw error;
-
-                addMedia({ type: 'video', url: fileName });
-                showToast("Video uploaded", "success");
-            }
-        } catch (e: any) {
-            console.error("Video upload failed:", e);
-            showToast("Video upload failed", "error");
-        } finally {
-            setIsUploading(false);
-        }
-    }, [userId, dateStr, isOnline, addMedia, showToast]);
-    */
-
-    // ============ AUDIO HANDLING ============
-    const handleVoiceNoteComplete = useCallback(async (audioBlob: Blob, duration: number) => {
-        if (!userId) return;
-
-        try {
-            const ext = audioBlob.type.includes('mp4') ? 'mp4' :
-                audioBlob.type.includes('ogg') ? 'ogg' : 'webm';
-
-            if (!isOnline) {
-                // Save as blob URL for offline (session-only)
-                const blobUrl = URL.createObjectURL(audioBlob);
-
-                const remotePath = `${userId}/audio-${Date.now()}.${ext}`;
-                await OfflineQueue.addPendingMedia(userId, {
-                    localPath: blobUrl,
-                    remotePath,
-                    type: 'audio',
-                    entryDate: dateStr
-                });
-
-                addMedia({
-                    type: 'audio',
-                    url: blobUrl,
-                    duration_seconds: duration
-                });
-                showToast("Voice note saved locally", "success");
-
-            } else {
-                // TRY ONLINE UPLOAD WITH FALLBACK
-                const fileName = `${userId}/audio-${Date.now()}.${ext}`;
-
-                try {
-                    const { error } = await supabase.storage
-                        .from('journal-media-private')
-                        .upload(fileName, audioBlob);
-
-                    if (error) throw error;
-
-                    addMedia({
-                        type: 'audio',
-                        url: fileName,
-                        duration_seconds: duration
-                    });
-                    showToast("Voice note saved", "success");
-                } catch (uploadError) {
-                    console.warn("Voice upload failed, falling back to offline save:", uploadError);
-
-                    // Fallback: save as blob URL (session-only)
-                    const blobUrl = URL.createObjectURL(audioBlob);
-
-                    const remotePath = `${userId}/audio-${Date.now()}.${ext}`;
-                    await OfflineQueue.addPendingMedia(userId, {
-                        localPath: blobUrl,
-                        remotePath,
-                        type: 'audio',
-                        entryDate: dateStr
-                    });
-
-                    addMedia({
-                        type: 'audio',
-                        url: blobUrl,
-                        duration_seconds: duration
-                    });
-                    showToast("Saved offline (Upload failed)", "success");
-                }
-            }
-        } catch (e: any) {
-            console.error("Voice note save failed:", e);
-            showToast("Failed to save voice note", "error");
-        }
-    }, [userId, dateStr, isOnline, addMedia, showToast]);
-
-    // ============ TRANSCRIPTION ============
-    const startTranscription = useCallback(async () => {
-        if (!isOnline) {
-            showToast("Internet required for transcription", "warning");
-            return;
-        }
-
-        try {
-            await voiceRecorder.start();
-            setIsTranscriptionRecording(true);
-            triggerHaptic();
-        } catch (e) {
-            showToast("Could not start microphone", "error");
-        }
-    }, [isOnline, voiceRecorder, showToast, triggerHaptic]);
-
-    const stopTranscription = useCallback(async () => {
-        setIsTranscriptionRecording(false);
-        setIsTranscribing(true);
-
-        try {
-            const audioBlob = await voiceRecorder.stop();
-
-            if (!audioBlob) {
-                showToast("No audio recorded", "warning");
-                setIsTranscribing(false);
-                return;
-            }
-
-            // Try transcription with fallback
-            let result: string | null = null;
-
-            try {
-                result = await transcribeAudio(audioBlob, "whisper-large-v3", sttLanguage);
-            } catch (e) {
-                console.warn("Primary transcription failed, trying fallback");
-                try {
-                    result = await transcribeAudio(audioBlob, "whisper-large-v3-turbo", sttLanguage);
-                } catch (e2) {
-                    console.error("All transcription attempts failed");
-                }
-            }
-
-            if (result?.trim()) {
-                setContent(prev => {
-                    const needsSpace = prev.length > 0 && !prev.endsWith(' ') && !prev.endsWith('\n');
-                    return prev + (needsSpace ? ' ' : '') + result.trim();
-                });
-                showToast("Transcription complete", "success");
-            } else {
-                showToast("Could not transcribe audio", "error");
-            }
-        } catch (e: any) {
-            console.error("Transcription error:", e);
-            showToast("Transcription failed", "error");
-        } finally {
-            setIsTranscribing(false);
-        }
-    }, [voiceRecorder, sttLanguage, showToast]);
-
-    // ============ VOICE NOTE (non-transcription) ============
-    const startVoiceNote = useCallback(async () => {
-        try {
-            await voiceRecorder.start();
-            triggerHaptic();
-        } catch (e) {
-            showToast("Could not start microphone", "error");
-        }
-    }, [voiceRecorder, showToast, triggerHaptic]);
-
-    const stopVoiceNote = useCallback(async () => {
-        try {
-            const audioBlob = await voiceRecorder.stop();
-            if (audioBlob) {
-                await handleVoiceNoteComplete(audioBlob, voiceRecorder.duration);
-            }
-        } catch (e) {
-            showToast("Failed to save voice note", "error");
-        }
-    }, [voiceRecorder, handleVoiceNoteComplete, showToast]);
-
-    // ============ OCR ============
-    const handleOCR = useCallback(async (file: File) => {
-        // OFFLINE-CAPABLE: Tesseract runs locally, so we remove the online check.
-        // if (!isOnline) { ... }
-
-        setIsProcessingOCR(true);
-
-        try {
-            const compressedBlob = await compressImage(file, 1, 1024);
-            const { performOCR } = await import("@/utils/ai");
-            const ocrFile = new File([compressedBlob], "ocr.webp", { type: compressedBlob.type });
-            const result = await performOCR(ocrFile);
-
-            if (result) {
-                setContent(prev => {
-                    const needsSpace = prev.length > 0 && !prev.endsWith(' ') && !prev.endsWith('\n');
-                    return prev + (needsSpace ? ' ' : '') + result;
-                });
-                showToast("Text extracted", "success");
-            }
-        } catch (e: any) {
-            console.error("OCR failed:", e);
-            showToast("Could not extract text", "error");
-        } finally {
-            setIsProcessingOCR(false);
-        }
-    }, [isOnline, showToast]);
-
-
-
-    // ============ BUTTON HANDLERS ============
-    const handleMicButtonClick = useCallback(() => {
-        if (isGuest && onGuestAction) {
-            onGuestAction();
-            return;
-        }
-
-        // If currently recording transcription, stop it
-        if (isTranscriptionRecording) {
-            stopTranscription();
-            return;
-        }
-
-        // If currently recording voice note, stop it
-        if (voiceRecorder.isRecording && !isTranscriptionRecording) {
-            stopVoiceNote();
-            return;
-        }
-
-        // Otherwise show menu
-        setShowMicMenu(prev => !prev);
-        setShowCameraMenu(false);
-        triggerHaptic();
-    }, [
-        isGuest, onGuestAction, isTranscriptionRecording,
-        voiceRecorder.isRecording, stopTranscription, stopVoiceNote, triggerHaptic
-    ]);
-
-    const handleCameraButtonClick = useCallback(() => {
-        if (isGuest && onGuestAction) {
-            onGuestAction();
-            return;
-        }
-        setShowCameraMenu(prev => !prev);
-        setShowMicMenu(false);
-        triggerHaptic();
-    }, [isGuest, onGuestAction, triggerHaptic]);
-
-    // ============ FILE INPUT HANDLERS ============
-    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!e.target.files?.[0]) return;
-        processImageFile(e.target.files[0]);
-        e.target.value = "";
+        setSyncStatus("saving");
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(saveEntry, 1000);
     };
 
-    const handleOCRUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!e.target.files?.[0]) return;
-        handleOCR(e.target.files[0]);
-        e.target.value = "";
-    };
-
-    /*
-    const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!e.target.files?.[0]) return;
-        processVideoFile(e.target.files[0]);
-        e.target.value = "";
-    };
-    */
-
-    // ============ NAVIGATION ============
-    const navigateDate = useCallback((direction: 'prev' | 'next') => {
-        // Force save before navigating
-        if (isDirtyRef.current && userId) {
-            saveEntry();
-        }
-        const newDate = direction === 'prev' ? subDays(date, 1) : addDays(date, 1);
-        onDateChange(newDate);
-    }, [date, onDateChange, userId, saveEntry]);
-
+    // ── RENDER ────────────────────────────────────────────────────────────────
     const isToday = isSameDay(date, new Date());
-    const isMinDate = minDate && isSameDay(date, minDate);
+    const isAtMin = !!(minDate && isSameDay(date, minDate));
 
-    // ============ TEXTAREA AUTO-RESIZE ============
-    const adjustTextareaHeight = useCallback(() => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-        textarea.style.height = 'auto';
-        textarea.style.height = `${textarea.scrollHeight}px`;
-    }, []);
-
-    useEffect(() => {
-        adjustTextareaHeight();
-    }, [content, adjustTextareaHeight]);
-
-    // ============ DRAG & DROP ============
-    const onDragOver = useCallback((e: React.DragEvent) => {
-        e.preventDefault();
-        setIsDragging(true);
-    }, []);
-
-    const onDragLeave = useCallback((e: React.DragEvent) => {
-        e.preventDefault();
-        setIsDragging(false);
-    }, []);
-
-    const onDrop = useCallback((e: React.DragEvent) => {
-        e.preventDefault();
-        setIsDragging(false);
-        const file = e.dataTransfer.files?.[0];
-        if (file?.type.startsWith('image/')) {
-            processImageFile(file);
-        }
-    }, [processImageFile]);
-
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-            e.preventDefault();
-            saveEntry();
-            textareaRef.current?.blur();
-        }
-    };
-
-    // ============ CLOSE MENUS ON OUTSIDE CLICK ============
-    useEffect(() => {
-        const handleClickOutside = (e: MouseEvent) => {
-            if (micMenuRef.current && !micMenuRef.current.contains(e.target as Node)) {
-                setShowMicMenu(false);
-            }
-            if (cameraMenuRef.current && !cameraMenuRef.current.contains(e.target as Node)) {
-                setShowCameraMenu(false);
-            }
-        };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-
-
-    // ============ RENDER ============
     return (
         <div className="flex flex-col flex-1 max-w-2xl w-full mx-auto mt-12 mb-8 items-center px-4">
-            {isMemoryLaneActive && (
-                <MemoryLaneControls
-                    isPlaying={isMemoryLanePlaying}
-                    onTogglePlay={() => setIsMemoryLanePlaying(!isMemoryLanePlaying)}
-                    onClose={() => {
-                        setIsMemoryLanePlaying(false);
-                        onMemoryLaneClose?.();
-                    }}
-                    onNext={() => onDateChange(subDays(date, 1))} // Next = Continue to Past
-                    onPrev={() => onDateChange(addDays(date, 1))} // Prev = Go back to Future
-                    isInteracting={isInteracting}
-                    mlSettings={mlSettings}
-                    updateMlSettings={updateMlSettings}
-                    ttsSettings={ttsSettings}
-                    updateTtsSettings={updateTtsSettings}
-                    ttsVoices={ttsVoices}
-                    isSpeaking={isSpeaking}
-                    accentColor={accentColor}
-                />
-            )}
-            {/* Date Navigation Header */}
+
+            {/* Date Navigation */}
             <div className="flex items-center gap-6 mb-12">
                 <button
-                    onClick={() => navigateDate('prev')}
-                    disabled={!!isMinDate}
+                    onClick={() => { if (!isAtMin) onDateChange(subDays(date, 1)); }}
+                    disabled={isAtMin}
                     className={cn(
                         "group p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition-all",
-                        isMinDate && "opacity-20 cursor-not-allowed"
+                        isAtMin && "opacity-20 cursor-not-allowed"
                     )}
                 >
-                    <ChevronLeft className={cn("w-5 h-5 text-zinc-500", !isMinDate && hoverClass)} />
+                    <ChevronLeft className={cn("w-5 h-5 text-zinc-500", !isAtMin && hoverClass)} />
                 </button>
 
                 <div className="flex flex-col items-center gap-1">
                     <h2 className="text-2xl font-light text-zinc-900 dark:text-white select-none">
                         {isToday ? "Today" : format(date, "MMMM d, yyyy")}
                     </h2>
-                    <div className="text-[10px] text-zinc-400 uppercase tracking-wider flex items-center gap-1">
-                        {!isOnline && <WifiOff className="w-3 h-3" />}
-                        {syncStatus === 'synced' && <span>✓ Synced</span>}
-                        {syncStatus === 'local' && <span>○ Saved locally</span>}
-                        {syncStatus === 'pending' && <span className="text-amber-500">◐ Pending sync</span>}
-                        {syncStatus === 'failed' && <span className="text-red-500">✗ Sync failed</span>}
+                    <div className="text-[10px] text-zinc-400 uppercase tracking-wider">
+                        {syncStatus === "synced" && "✓ Synced"}
+                        {syncStatus === "saving" && "○ Saving…"}
+                        {syncStatus === "local" && "○ Saved locally"}
+                        {syncStatus === "error" && "✗ Save failed — check connection"}
                     </div>
                 </div>
 
                 <button
-                    onClick={() => navigateDate('next')}
+                    onClick={() => { if (!isToday) onDateChange(addDays(date, 1)); }}
                     disabled={isToday}
                     className={cn(
                         "group p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition-all",
@@ -946,280 +722,180 @@ export function JournalEditor({
                 </button>
             </div>
 
-            {/* Offline Banner */}
-            {!isOnline && (
-                <div className="w-full mb-4 px-4 py-2 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl text-center text-xs text-amber-700 dark:text-amber-400">
-                    📡 You're offline. Changes will sync when connected.
-                </div>
-            )}
-
-            {/* Text Editor */}
-            <div
-                className={cn(
-                    "w-full bg-white dark:bg-zinc-900 rounded-3xl shadow-sm border border-zinc-100 dark:border-zinc-800 overflow-hidden transition-all duration-500",
-                    readingMode && "shadow-none border-transparent bg-transparent dark:bg-transparent"
-                )}
-            >
-                <textarea
-                    ref={textareaRef}
-                    value={content}
-                    onChange={(e) => {
-                        setContent(e.target.value);
-                        adjustTextareaHeight();
-                    }}
-                    onKeyDown={handleKeyDown}
-                    disabled={readingMode}
-                    placeholder={readingMode ? "No entry for this day..." : "Write about your day..."}
-                    className={cn(
-                        "w-full p-6 bg-transparent resize-none outline-none text-lg leading-relaxed text-zinc-800 dark:text-zinc-200 placeholder:text-zinc-300 dark:placeholder:text-zinc-700 transition-all font-light",
-                        readingMode ? "text-2xl leading-loose text-center cursor-default select-none" : "min-h-[200px]"
-                    )}
-                    rows={1}
-                />
-
-                {/* Media Grid */}
-                <div className={cn(
-                    "w-full px-6 pb-6 grid gap-4 transition-all duration-500",
-                    mediaDisplayMode === 'grid' ? "grid-cols-2" : "grid-cols-1",
-                    readingMode && "mt-8"
-                )}>
-                    {mediaItems.map((item, index) => (
-                        <div key={index} className="relative aspect-square rounded-2xl overflow-hidden bg-zinc-100 dark:bg-zinc-800 group">
-                            <MediaItemView item={item} accentColor={accentColor} />
-                            {!readingMode && (
-                                <button
-                                    onClick={() => removeMedia(index)}
-                                    className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500/80 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all backdrop-blur-sm"
-                                >
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
+            {/* Editor Container */}
+            <div className="w-full bg-white dark:bg-zinc-900 rounded-3xl shadow-sm border border-zinc-100 dark:border-zinc-800 overflow-hidden flex flex-col relative">
+                {isLoading ? (
+                    <div className="flex items-center justify-center p-12">
+                        <Loader2 className="w-5 h-5 animate-spin text-zinc-300" />
+                    </div>
+                ) : (
+                    <>
+                        <div className="relative w-full">
+                            <textarea
+                                ref={textareaRef}
+                                value={content}
+                                onChange={handleChange}
+                                placeholder="Write about your day…"
+                                className="w-full p-6 bg-transparent resize-none outline-none text-lg leading-relaxed text-zinc-800 dark:text-zinc-200 placeholder:text-zinc-300 dark:placeholder:text-zinc-700 font-light min-h-[220px]"
+                            />
+                            
+                            {/* Sparkles Button overlayed in bottom right of textarea section */}
+                            {content.trim() && !isLoading && (
+                                <div className="absolute right-4 bottom-4 flex items-center">
+                                    <button
+                                        onClick={handleAiRefine}
+                                        disabled={isRefining}
+                                        className={cn(
+                                            "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm transition-all duration-200 active:scale-95 text-white cursor-pointer",
+                                            accentColor,
+                                            isRefining && "animate-pulse"
+                                        )}
+                                        title="Refine entry with AI"
+                                    >
+                                        {isRefining ? (
+                                            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                                        ) : (
+                                            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                                        )}
+                                        <span>Refine</span>
+                                    </button>
+                                </div>
                             )}
                         </div>
-                    ))}
-                </div>
 
-                {/* Status indicator */}
-                <div className="flex justify-end px-4 pb-2">
-                    <span className="text-xs text-zinc-400">
-                        {isLoading ? "Loading..." :
-                            isSaving ? "Saving..." :
-                                voiceRecorder.isRecording ? `Recording ${Math.floor(voiceRecorder.duration / 60)}:${(voiceRecorder.duration % 60).toString().padStart(2, '0')}` :
-                                    isTranscribing ? "Transcribing..." :
-                                        ""}
-                    </span>
-                </div>
-            </div>
-
-            {!readingMode && (
-                <>
-                    {/* Hidden Inputs */}
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        className="hidden"
-                    />
-                    <input
-                        ref={ocrFileInputRef}
-                        type="file"
-                        accept="image/*"
-                        onChange={handleOCRUpload}
-                        className="hidden"
-                    />
-
-                    {/* Action Buttons */}
-                    <div className="flex w-full justify-center gap-10 mt-10 mb-4">
-                        {/* Microphone Button */}
-                        <div className="relative" ref={micMenuRef}>
-                            <button
-                                onClick={handleMicButtonClick}
-                                disabled={isTranscribing || isProcessingOCR}
-                                className={cn(
-                                    "group p-4 rounded-full transition-all duration-300",
-                                    isTranscriptionRecording || voiceRecorder.isRecording
-                                        ? "bg-red-500 scale-110 shadow-lg shadow-red-500/30"
-                                        : showMicMenu
-                                            ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700"
-                                            : "hover:bg-black/5 dark:hover:bg-white/10"
-                                )}
-                            >
-                                {voiceRecorder.isRecording || isTranscriptionRecording ? (
-                                    <div className="flex items-center gap-2">
-                                        <Square className="w-5 h-5 text-white fill-current" />
-                                        <span className="text-white text-xs font-mono">
-                                            {Math.floor(voiceRecorder.duration / 60)}:{(voiceRecorder.duration % 60).toString().padStart(2, '0')}
-                                        </span>
+                        {/* Media Preview Section */}
+                        {mediaItems.length > 0 && (
+                            <div className="border-t border-zinc-100 dark:border-zinc-800 p-6 bg-zinc-50/50 dark:bg-zinc-950/20 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                {/* Photo Preview */}
+                                {mediaItems.filter(item => item.type === "image").map((item, idx) => (
+                                    <div key={idx} className="relative group rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-955 shadow-sm aspect-video max-h-48 flex items-center justify-center transition-all hover:shadow-md">
+                                        <img 
+                                            src={item.url} 
+                                            alt="Attached moment" 
+                                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                        />
+                                        <button
+                                            onClick={() => handleRemoveMedia("image")}
+                                            className="absolute top-3 right-3 p-2 rounded-xl bg-black/60 hover:bg-black/85 text-white transition-all cursor-pointer shadow-md active:scale-90"
+                                            title="Remove photo"
+                                        >
+                                            <Trash2 className="w-4 h-4 shrink-0" />
+                                        </button>
                                     </div>
-                                ) : isTranscribing ? (
-                                    <Loader2 className="w-6 h-6 text-zinc-600 animate-spin" />
-                                ) : (
-                                    <Mic className={cn("w-6 h-6 text-zinc-600", hoverClass)} />
+                                ))}
+
+                                {/* Audio Preview */}
+                                {mediaItems.filter(item => item.type === "audio").map((item, idx) => (
+                                    <CustomAudioPlayer 
+                                        key={idx}
+                                        url={item.url} 
+                                        onRemove={() => handleRemoveMedia("audio")}
+                                        accentColor={accentColor}
+                                        knownDuration={item.duration}
+                                    />
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Media Controls bottom bar */}
+                        <div className="flex justify-between items-center px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50/20 dark:bg-zinc-950/5 relative">
+                            <div className="flex gap-3">
+                                <input
+                                    type="file"
+                                    id="photo-upload-input"
+                                    accept="image/*"
+                                    onChange={handlePhotoSelect}
+                                    className="hidden"
+                                    disabled={isLoadingMedia}
+                                />
+                                
+                                {!mediaItems.some(item => item.type === "image") && (
+                                    <button
+                                        onClick={() => document.getElementById("photo-upload-input")?.click()}
+                                        disabled={isLoadingMedia}
+                                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-zinc-600 dark:text-zinc-400 active:scale-95 cursor-pointer"
+                                    >
+                                        <ImageIcon className="w-4 h-4 text-zinc-400" />
+                                        <span>Add Photo</span>
+                                    </button>
                                 )}
-                            </button>
 
-                            {/* Microphone Menu */}
-                            {showMicMenu && !voiceRecorder.isRecording && !isTranscriptionRecording && (
-                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl min-w-[160px] z-50">
+                                {!mediaItems.some(item => item.type === "audio") && (
                                     <button
-                                        onClick={() => {
-                                            setShowMicMenu(false);
-                                            startTranscription();
-                                        }}
-                                        disabled={!isOnline}
-                                        className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors disabled:opacity-50"
+                                        onClick={startRecording}
+                                        disabled={isLoadingMedia}
+                                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-zinc-600 dark:text-zinc-400 active:scale-95 cursor-pointer"
                                     >
-                                        <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 flex items-center justify-center">
-                                            <Mic className="w-4 h-4 text-indigo-500" />
-                                        </div>
-                                        <div className="text-left">
-                                            <div className="text-sm font-medium text-zinc-900 dark:text-white">Transcribe</div>
-                                            <div className="text-[10px] text-zinc-500">
-                                                {isOnline ? "Speech to text" : "Requires internet"}
-                                            </div>
-                                        </div>
+                                        <Mic className="w-4 h-4 text-zinc-400" />
+                                        <span>Record Voice</span>
                                     </button>
+                                )}
+                            </div>
 
-                                    <button
-                                        onClick={() => {
-                                            setShowMicMenu(false);
-                                            startVoiceNote();
-                                        }}
-                                        className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
-                                    >
-                                        <div className="w-8 h-8 rounded-lg bg-red-50 dark:bg-red-500/20 flex items-center justify-center">
-                                            <AudioLines className="w-4 h-4 text-red-500" />
-                                        </div>
-                                        <div className="text-left">
-                                            <div className="text-sm font-medium text-zinc-900 dark:text-white">Voice Note</div>
-                                            <div className="text-[10px] text-zinc-500">
-                                                {isOnline ? "Save audio" : "Works offline"}
-                                            </div>
-                                        </div>
-                                    </button>
+                            {isLoadingMedia && (
+                                <div className="flex items-center gap-1.5 text-xs text-zinc-400 dark:text-zinc-500 animate-pulse">
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Uploading media...</span>
                                 </div>
                             )}
                         </div>
 
-                        {/* Camera Button */}
-                        <div className="relative" ref={cameraMenuRef}>
-                            <button
-                                onClick={handleCameraButtonClick}
-                                disabled={isUploading || isProcessingOCR}
-                                className={cn(
-                                    "group p-4 rounded-full transition-all duration-300",
-                                    isProcessingOCR
-                                        ? "bg-blue-500/20"
-                                        : showCameraMenu
-                                            ? "bg-zinc-100 dark:bg-zinc-800 ring-2 ring-zinc-200 dark:ring-zinc-700"
-                                            : "hover:bg-black/5 dark:hover:bg-white/10"
-                                )}
-                            >
-                                {isProcessingOCR || isUploading ? (
-                                    <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
-                                ) : (
-                                    <Camera className={cn("w-6 h-6 text-zinc-600", hoverClass)} />
-                                )}
-                            </button>
-
-                            {/* Camera Menu */}
-                            {showCameraMenu && (
-                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl min-w-[160px] z-50">
+                        {/* Refinement Preview Section */}
+                        {refinedContent && showRefinedPreview && (
+                            <div className="border-t border-zinc-100 dark:border-zinc-800 p-6 bg-zinc-50/50 dark:bg-zinc-950/20 backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                <div className="flex items-center gap-2 mb-3">
+                                    <Sparkles className={cn("w-4 h-4", accentObj.class)} />
+                                    <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">AI Refined Version</span>
+                                </div>
+                                <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300 font-normal mb-4 whitespace-pre-wrap">
+                                    {refinedContent}
+                                </p>
+                                <div className="flex gap-2">
                                     <button
-                                        onClick={() => {
-                                            setShowCameraMenu(false);
-                                            fileInputRef.current?.click();
-                                        }}
-                                        className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
+                                        onClick={handleApplyRefine}
+                                        className={cn("px-4 py-2 rounded-xl text-xs font-bold text-white transition-all active:scale-95", accentColor)}
                                     >
-                                        <div className="w-8 h-8 rounded-lg bg-orange-50 dark:bg-orange-500/20 flex items-center justify-center">
-                                            <Camera className="w-4 h-4 text-orange-500" />
-                                        </div>
-                                        <div className="text-left">
-                                            <div className="text-sm font-medium text-zinc-900 dark:text-white">Photo</div>
-                                            <div className="text-[10px] text-zinc-500">
-                                                {isOnline ? "Capture & upload" : "Save locally"}
-                                            </div>
-                                        </div>
+                                        Use AI Version
                                     </button>
-
                                     <button
-                                        onClick={() => {
-                                            setShowCameraMenu(false);
-                                            ocrFileInputRef.current?.click();
-                                        }}
-                                        className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
+                                        onClick={() => setShowRefinedPreview(false)}
+                                        className="px-4 py-2 rounded-xl text-xs font-bold text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all active:scale-95"
                                     >
-                                        <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-500/20 flex items-center justify-center">
-                                            <ScanText className="w-4 h-4 text-blue-500" />
-                                        </div>
-                                        <div className="text-left">
-                                            <div className="text-sm font-medium text-zinc-900 dark:text-white">Scan Text</div>
-                                            <div className="text-[10px] text-zinc-500">Extract text (OCR)</div>
-                                        </div>
-                                    </button>
-
-                                    <button
-                                        onClick={async () => {
-                                            setShowCameraMenu(false);
-                                            showToast("Video support coming soon", "info");
-                                        }}
-                                        className="flex items-center gap-3 p-3 w-full hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors"
-                                    >
-                                        <div className="w-8 h-8 rounded-lg bg-purple-50 dark:bg-purple-500/20 flex items-center justify-center opacity-50">
-                                            <Video className="w-4 h-4 text-purple-500" />
-                                        </div>
-                                        <div className="text-left opacity-50">
-                                            <div className="text-sm font-medium text-zinc-900 dark:text-white">Video</div>
-                                            <div className="text-[10px] text-zinc-500">
-                                                Coming soon
-                                            </div>
-                                        </div>
+                                        Keep Original
                                     </button>
                                 </div>
-                            )}
-                        </div >
-                    </div >
-                </>
-            )}
+                            </div>
+                        )}
 
-            {/* AI Rewrite Button */}
-            {
-                aiRewriteEnabled && content.trim().length > 20 && isOnline && (
-                    <button
-                        onClick={async () => {
-                            if (isRewriting) return;
-                            setIsRewriting(true);
-                            try {
-                                const { performRewrite } = await import("@/utils/ai");
-                                const result = await performRewrite(content);
-                                if (result) {
-                                    setContent(result);
-                                    showToast("Entry polished", "success");
-                                }
-                            } catch (e: any) {
-                                showToast(e.message || "Rewrite failed", "error");
-                            } finally {
-                                setIsRewriting(false);
-                            }
-                        }}
-                        disabled={isRewriting}
-                        className={cn(
-                            "flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all mx-auto mt-4",
-                            isRewriting
-                                ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-400"
-                                : "bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                        {/* Recording Live Overlay */}
+                        {isRecording && (
+                            <div className="absolute inset-x-0 bottom-0 z-20 flex items-center justify-between px-6 py-4 bg-zinc-900 text-white animate-in slide-in-from-bottom-full duration-300">
+                                <div className="flex items-center gap-3">
+                                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping shrink-0" />
+                                    <span className="text-sm font-semibold tracking-wider font-mono">
+                                        Recording: {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, "0")}
+                                    </span>
+                                    <span className="text-xs text-zinc-400 shrink-0">(Max 5:00)</span>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={stopRecording}
+                                        className={cn("px-4 py-1.5 rounded-xl text-xs font-bold text-white cursor-pointer transition-all active:scale-95", accentColor)}
+                                    >
+                                        Done
+                                    </button>
+                                    <button
+                                        onClick={cancelRecording}
+                                        className="px-4 py-1.5 rounded-xl text-xs font-bold text-zinc-400 hover:bg-zinc-800 transition-all active:scale-95 cursor-pointer"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
                         )}
-                    >
-                        {isRewriting ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                            <Sparkles className={cn("w-4 h-4", accentObj.class)} />
-                        )}
-                        <span>{isRewriting ? "Refining..." : "Polish with AI"}</span>
-                    </button>
-                )
-            }
-        </div >
+                    </>
+                )}
+            </div>
+        </div>
     );
 }

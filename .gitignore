@@ -27,3 +27,6 @@ coverage/
 
 # Supabase local
 .supabase/
+
+# Next.js build cache
+.next/

@@ -31,7 +31,7 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
 
     // Fetch entry dates for the current month
     useEffect(() => {
-        if (!isOpen || !userId) return;
+        if (!isOpen) return;
 
         const fetchEntryDates = async () => {
             const monthStart = startOfMonth(viewDate);
@@ -42,9 +42,10 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
             try {
                 // Scan localStorage for cached entries in this month's range
                 const monthDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
+                const cacheUid = userId || 'null';
                 monthDays.forEach(day => {
                     const dateStr = format(day, 'yyyy-MM-dd');
-                    const cacheKey = `entry_cache_${userId}_${dateStr}`;
+                    const cacheKey = `entry_cache_${cacheUid}_${dateStr}`;
                     const cached = localStorage.getItem(cacheKey);
                     if (cached) {
                         try {
@@ -65,8 +66,8 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
                 console.error("Error loading cached dates:", e);
             }
 
-            // Then try to fetch from Supabase (if online)
-            if (!navigator.onLine) return; // Skip network call if offline
+            // Then try to fetch from Supabase (if online and has valid userId)
+            if (!navigator.onLine || !userId) return; // Skip network call if offline or guest mode
 
             try {
                 const { data, error } = await supabase
@@ -105,6 +106,7 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
     const endPadding = totalSlots - (startPadding + daysInMonth.length);
 
     const isPrevDisabled = !!minDate && endOfMonth(subMonths(viewDate, 1)) < minDate;
+    const isNextDisabled = startOfMonth(addMonths(viewDate, 1)) > startOfMonth(new Date());
 
     return (
         <div
@@ -141,11 +143,14 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
                     </span>
                     <button
                         onClick={() => {
-                            const newDate = addMonths(viewDate, 1);
-                            setViewDate(newDate);
-                            onMonthChange?.(newDate);
+                            if (!isNextDisabled) {
+                                const newDate = addMonths(viewDate, 1);
+                                setViewDate(newDate);
+                                onMonthChange?.(newDate);
+                            }
                         }}
-                        className={cn("p-1 text-zinc-400", hoverTextClass)}
+                        disabled={isNextDisabled}
+                        className={cn("p-1 text-zinc-400 transition-opacity", isNextDisabled ? "opacity-30 cursor-not-allowed" : hoverTextClass)}
                     >
                         <ChevronRight className="w-5 h-5" />
                     </button>
@@ -169,8 +174,9 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
                         const isToday = isSameDay(day, new Date());
                         const hasEntry = entryDates.has(dateStr);
 
-                        // Disable if before minDate (compare without time, SAFE COPY)
-                        const isDisabled = minDate ? day < new Date(new Date(minDate).setHours(0, 0, 0, 0)) : false;
+                        // Disable if in the future (tomorrow and beyond) or before minDate
+                        const isFuture = day > new Date(new Date().setHours(23, 59, 59, 999));
+                        const isDisabled = isFuture || (minDate ? day < new Date(new Date(minDate).setHours(0, 0, 0, 0)) : false);
 
                         return (
                             <button

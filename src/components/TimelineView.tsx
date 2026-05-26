@@ -1,8 +1,18 @@
-import { format } from "date-fns";
-import { ChevronRight, Image as ImageIcon, Mic, Loader2, Search, X } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
+import { format, parseISO } from "date-fns";
+import { X, Search, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useEffect, useState, useCallback, useRef } from "react";
 import { supabase } from "@/utils/supabase/client";
+import { Storage, STORAGE_KEYS } from "@/utils/storage";
+import { ACCENT_COLORS } from "@/constants/colors";
+import { resolveMediaUrl } from "@/utils/media";
+import { CustomAudioPlayer } from "./JournalEditor";
+
+interface Entry {
+    date: string;
+    content: string;
+    media_items?: { type: "image" | "audio"; url: string; duration?: number }[];
+}
 
 interface TimelineViewProps {
     userId: string;
@@ -11,344 +21,226 @@ interface TimelineViewProps {
     onClose: () => void;
     isOpen: boolean;
     accentColor?: string;
+    isGuest?: boolean;
 }
 
-interface TimelineEntry {
-    date: string;
-    content: string;
-    hasImage: boolean;
-    hasAudio: boolean;
-}
-
-const PAGE_SIZE = 30; // Load 30 entries at a time
-
-export function TimelineView({ userId, currentDate, onDateSelect, onClose, isOpen, accentColor = "bg-indigo-500" }: TimelineViewProps) {
-    const [entries, setEntries] = useState<TimelineEntry[]>([]);
+export function TimelineView({
+    userId,
+    currentDate,
+    onDateSelect,
+    onClose,
+    isOpen,
+    accentColor = "bg-indigo-500",
+    isGuest = false,
+}: TimelineViewProps) {
+    const [entries, setEntries] = useState<Entry[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [isLoadingMore, setIsLoadingMore] = useState(false);
-    const [hasMore, setHasMore] = useState(true);
-    const [offset, setOffset] = useState(0);
-    const [isVisible, setIsVisible] = useState(false);
-
-    // Search state
     const [searchQuery, setSearchQuery] = useState("");
-    const [debouncedQuery, setDebouncedQuery] = useState("");
-    const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-    const accentColorPlain = accentColor.replace('bg-', 'text-');
+    const accentObj = ACCENT_COLORS.find(c => c.bgClass === accentColor) || ACCENT_COLORS[0];
+    const effectiveId = userId || "guest";
 
-    // Handle animation states
-    useEffect(() => {
-        if (isOpen) {
-            setIsVisible(true);
-        } else {
-            // Clear search when panel closes
-            setSearchQuery("");
-            setDebouncedQuery("");
-        }
-    }, [isOpen]);
-
-    const handleAnimationEnd = () => {
-        if (!isOpen) {
-            setIsVisible(false);
-        }
-    };
-
-    // Debounce search input
-    useEffect(() => {
-        if (debounceTimerRef.current) {
-            clearTimeout(debounceTimerRef.current);
-        }
-        debounceTimerRef.current = setTimeout(() => {
-            setDebouncedQuery(searchQuery);
-        }, 300);
-        return () => {
-            if (debounceTimerRef.current) {
-                clearTimeout(debounceTimerRef.current);
-            }
-        };
-    }, [searchQuery]);
-
-    // Initial fetch (re-runs on search change)
-    useEffect(() => {
-        if (!userId || !isOpen) return;
-
-        const fetchRecentEntries = async () => {
-            setIsLoading(true);
-            setOffset(0);
-            setHasMore(true);
-
-            // OFFLINE-FIRST: Load from localStorage cache first
-            const cachedEntries: TimelineEntry[] = [];
-            try {
-                // Scan localStorage for entries (look for last 3 months of cache)
-                const today = new Date();
-                for (let i = 0; i < 90; i++) {
-                    const date = new Date(today);
-                    date.setDate(date.getDate() - i);
-                    const dateStr = format(date, 'yyyy-MM-dd');
-                    const cacheKey = `entry_cache_${userId}_${dateStr}`;
-                    const cached = localStorage.getItem(cacheKey);
-                    if (cached) {
-                        try {
-                            const entry = JSON.parse(cached);
-                            if (entry.content && entry.content.trim()) {
-                                // Apply search filter if present
-                                if (!debouncedQuery.trim() ||
-                                    entry.content.toLowerCase().includes(debouncedQuery.trim().toLowerCase())) {
-                                    cachedEntries.push({
-                                        date: entry.date || dateStr,
-                                        content: entry.content,
-                                        hasImage: entry.media_items?.some((m: any) => m.type === 'image') || false,
-                                        hasAudio: entry.media_items?.some((m: any) => m.type === 'audio') || false
-                                    });
-                                }
-                            }
-                        } catch (e) {
-                            // Ignore corrupted cache
-                        }
-                    }
-                }
-                // Sort by date descending
-                cachedEntries.sort((a, b) => b.date.localeCompare(a.date));
-                // Set cached entries immediately for instant UI
-                if (cachedEntries.length > 0) {
-                    setEntries(cachedEntries.slice(0, PAGE_SIZE));
-                    setHasMore(cachedEntries.length > PAGE_SIZE);
-                    setOffset(PAGE_SIZE);
-                }
-            } catch (e) {
-                console.error("Error loading cached timeline:", e);
-            }
-
-            // Then try to fetch from Supabase (if online)
-            if (!navigator.onLine) {
-                setIsLoading(false);
-                return; // Skip network call if offline
-            }
-
-            try {
-                let query = supabase
-                    .from('entries')
-                    .select('date, content, image_url, audio_url')
-                    .eq('user_id', userId);
-
-                // Add search filter if query exists
-                if (debouncedQuery.trim()) {
-                    query = query.ilike('content', `%${debouncedQuery.trim()}%`);
-                }
-
-                const { data, error } = await query
-                    .order('date', { ascending: false })
-                    .range(0, PAGE_SIZE - 1);
-
-                if (!error && data) {
-                    setEntries(data.map(e => ({
-                        date: e.date,
-                        content: e.content,
-                        hasImage: !!e.image_url,
-                        hasAudio: !!e.audio_url
-                    })));
-                    setHasMore(data.length === PAGE_SIZE);
-                    setOffset(PAGE_SIZE);
-                }
-            } catch (e) {
-                // Network error - keep using cached entries
-                console.log("Timeline: Using cached entries (offline)");
-            }
-            setIsLoading(false);
-        };
-
-        fetchRecentEntries();
-    }, [userId, isOpen, debouncedQuery]);
-
-    // Load more entries with pagination
-    const loadMore = useCallback(async () => {
-        if (isLoadingMore || !hasMore || !userId) return;
-
-        setIsLoadingMore(true);
-
-        let query = supabase
-            .from('entries')
-            .select('date, content, image_url, audio_url')
-            .eq('user_id', userId);
-
-        // Add search filter if query exists
-        if (debouncedQuery.trim()) {
-            query = query.ilike('content', `%${debouncedQuery.trim()}%`);
-        }
-
-        const { data, error } = await query
-            .order('date', { ascending: false })
-            .range(offset, offset + PAGE_SIZE - 1);
-
-        if (!error && data) {
-            setEntries(prev => [...prev, ...data.map(e => ({
-                date: e.date,
-                content: e.content,
-                hasImage: !!e.image_url,
-                hasAudio: !!e.audio_url
-            }))]);
-            setHasMore(data.length === PAGE_SIZE);
-            setOffset(prev => prev + PAGE_SIZE);
-        }
-        setIsLoadingMore(false);
-    }, [userId, offset, hasMore, isLoadingMore, debouncedQuery]);
-
-    // Infinite scroll handler
-    const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-        const target = e.target as HTMLDivElement;
-        const scrollBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-
-        // Load more when within 100px of bottom
-        if (scrollBottom < 100 && hasMore && !isLoadingMore) {
-            loadMore();
-        }
-    }, [hasMore, isLoadingMore, loadMore]);
-
-    // Helper function to highlight matching text
-    const highlightMatch = (text: string, query: string) => {
-        if (!query.trim() || !text) return text;
-
-        const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-        const parts = text.split(regex);
-
-        return parts.map((part, i) =>
-            regex.test(part) ? (
-                <mark key={i} className="bg-yellow-200 dark:bg-yellow-500/30 text-inherit rounded px-0.5">{part}</mark>
-            ) : part
+    // Helper to resolve media URLs to signed URLs
+    const resolveEntriesMedia = async (rawEntries: Entry[]): Promise<Entry[]> => {
+        return Promise.all(
+            rawEntries.map(async (entry) => {
+                if (!entry.media_items || entry.media_items.length === 0) return entry;
+                const resolvedItems = await Promise.all(
+                    entry.media_items.map(async (item) => ({
+                        ...item,
+                        url: await resolveMediaUrl(item.url),
+                    }))
+                );
+                return { ...entry, media_items: resolvedItems };
+            })
         );
     };
 
-    // Don't render anything if completely hidden
-    if (!isVisible && !isOpen) return null;
+    const loadEntries = useCallback(async () => {
+        setIsLoading(true);
+
+        // Load from localStorage cache
+        const localEntries: Entry[] = [];
+        const now = new Date();
+        for (let i = 0; i < 365; i++) {
+            const d = new Date(now);
+            d.setDate(d.getDate() - i);
+            const dateStr = format(d, "yyyy-MM-dd");
+            const cached = Storage.getJSONSync<any>(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr));
+            if (cached?.content?.trim()) {
+                localEntries.push({ 
+                    date: dateStr, 
+                    content: cached.content.trim(),
+                    media_items: cached.media_items
+                });
+            }
+        }
+        
+        const resolvedLocal = await resolveEntriesMedia(localEntries);
+        setEntries(resolvedLocal);
+        setIsLoading(false);
+
+        // If logged in, fetch from Supabase and merge
+        if (!isGuest && userId && navigator.onLine) {
+            try {
+                const { data, error } = await supabase
+                    .from("entries")
+                    .select("date, content, media_items")
+                    .eq("user_id", userId)
+                    .not("content", "is", null)
+                    .neq("content", "")
+                    .order("date", { ascending: false })
+                    .limit(200);
+
+                if (!error && data) {
+                    // Cache all fetched entries locally
+                    for (const e of data) {
+                        await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, e.date), e);
+                    }
+                    // Merge: server data takes precedence
+                    const serverDates = new Set(data.map(e => e.date));
+                    const merged = [
+                        ...data,
+                        ...localEntries.filter(e => !serverDates.has(e.date)),
+                    ].sort((a, b) => b.date.localeCompare(a.date));
+                    
+                    const resolvedMerged = await resolveEntriesMedia(merged);
+                    setEntries(resolvedMerged);
+                }
+            } catch {
+                // Silently fail — localStorage data already shown
+            }
+        }
+    }, [effectiveId, userId, isGuest]);
+
+    useEffect(() => {
+        if (isOpen) {
+            setSearchQuery("");
+            loadEntries();
+        }
+    }, [isOpen, loadEntries]);
+
+    const filtered = searchQuery.trim()
+        ? entries.filter(e =>
+            e.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            e.date.includes(searchQuery)
+        )
+        : entries;
+
+    if (!isOpen) return null;
 
     return (
-        <div className={cn(
-            "fixed inset-0 z-[100] flex items-center justify-end transition-opacity duration-300",
-            isOpen ? "opacity-100" : "opacity-0"
-        )}>
-            {/* Backdrop - Opaque on mobile, blurred on desktop */}
+        <div
+            className="fixed inset-0 z-[9998] bg-black/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
+            onClick={onClose}
+        >
             <div
-                className="absolute inset-0 bg-black/90 md:bg-black/30 md:dark:bg-black/50 md:backdrop-blur-md pointer-events-auto touch-manipulation transition-opacity duration-300"
-                onClick={onClose}
-                onTouchEnd={(e) => {
-                    if (e.target === e.currentTarget) onClose();
-                }}
-            />
-
-            {/* Panel with slide animation */}
-            <div
-                className={cn(
-                    "relative w-full max-w-sm h-full bg-white dark:bg-zinc-950 shadow-2xl flex flex-col pointer-events-auto transition-transform duration-300 ease-out",
-                    isOpen ? "translate-x-0" : "translate-x-full"
-                )}
-                onTransitionEnd={handleAnimationEnd}
+                className="bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-3xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden shadow-2xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-300"
+                onClick={e => e.stopPropagation()}
             >
-                <div className="p-6 pt-safe border-b border-zinc-100 dark:border-zinc-900 flex items-center justify-between">
-                    <h2 className="text-xl font-semibold text-zinc-900 dark:text-white">Timeline</h2>
-                    <button onClick={onClose} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-full transition-colors touch-manipulation">
-                        <ChevronRight className="w-5 h-5 text-zinc-500" />
+                {/* Header */}
+                <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
+                    <h2 className="text-base font-bold text-zinc-900 dark:text-white">Timeline</h2>
+                    <button onClick={onClose} className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
+                        <X className="w-4 h-4 text-zinc-500" />
                     </button>
                 </div>
 
-                {/* Search Bar */}
-                <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-900">
+                {/* Search */}
+                <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
                     <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                         <input
                             type="text"
-                            placeholder="Search entries..."
+                            placeholder="Search entries…"
                             value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-10 pr-10 py-2.5 bg-zinc-100 dark:bg-zinc-900 border-0 rounded-xl text-sm text-zinc-900 dark:text-white placeholder:text-zinc-400 outline-none focus:ring-2 focus:ring-zinc-300 dark:focus:ring-zinc-700 transition-all"
+                            onChange={e => setSearchQuery(e.target.value)}
+                            className="w-full pl-9 pr-4 py-2 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-sm outline-none focus:ring-1 focus:ring-zinc-300 dark:focus:ring-zinc-700 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400"
                         />
-                        {searchQuery && (
-                            <button
-                                onClick={() => setSearchQuery("")}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-full transition-colors"
-                            >
-                                <X className="w-4 h-4 text-zinc-400" />
-                            </button>
-                        )}
                     </div>
                 </div>
 
-                <div
-                    className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-subtle"
-                    onScroll={handleScroll}
-                >
+                {/* Entries */}
+                <div className="flex-1 overflow-y-auto">
                     {isLoading ? (
-                        <div className="flex items-center justify-center h-40">
-                            <div className={cn("w-6 h-6 border-2 border-zinc-300 dark:border-zinc-700 rounded-full animate-spin", accentColorPlain.replace('text-', 'border-t-'))} />
+                        <div className="flex items-center justify-center p-12">
+                            <Loader2 className="w-5 h-5 animate-spin text-zinc-300" />
                         </div>
-                    ) : entries.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-16 text-zinc-500">
-                            {debouncedQuery ? (
-                                <>
-                                    <Search className="w-10 h-10 mb-3 text-zinc-300 dark:text-zinc-700" />
-                                    <p className="font-medium">No results found</p>
-                                    <p className="text-xs mt-1">Try a different search term</p>
-                                </>
-                            ) : (
-                                <>
-                                    <div className="w-10 h-10 mb-3 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
-                                        <span className="text-2xl">📝</span>
-                                    </div>
-                                    <p className="font-medium">No entries yet</p>
-                                    <p className="text-xs mt-1">Start writing your first entry!</p>
-                                </>
-                            )}
+                    ) : filtered.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center p-12 text-center gap-2">
+                            <p className="text-zinc-400 text-sm">
+                                {searchQuery ? "No entries match your search." : "No entries yet. Start writing!"}
+                            </p>
                         </div>
                     ) : (
-                        <>
-                            {entries.map((entry) => {
-                                const isCurrent = format(currentDate, 'yyyy-MM-dd') === entry.date;
+                        <div className="p-3 space-y-1">
+                            {filtered.map(entry => {
+                                const entryDate = parseISO(entry.date);
+                                const isSelected = format(currentDate, "yyyy-MM-dd") === entry.date;
                                 return (
                                     <button
                                         key={entry.date}
-                                        onClick={() => {
-                                            onDateSelect(new Date(entry.date));
-                                            onClose();
-                                        }}
+                                        onClick={() => { onDateSelect(entryDate); onClose(); }}
                                         className={cn(
-                                            "w-full text-left p-4 rounded-2xl transition-all border",
-                                            isCurrent
-                                                ? "bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 ring-1 ring-zinc-200 dark:ring-zinc-800"
-                                                : "bg-white dark:bg-zinc-950 border-transparent hover:border-zinc-100 dark:hover:border-zinc-900 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/50"
+                                            "w-full text-left px-4 py-3 rounded-2xl transition-all group",
+                                            isSelected
+                                                ? cn(accentObj.bgClass, "text-white")
+                                                : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
                                         )}
                                     >
-                                        <div className="flex items-center justify-between mb-2">
-                                            <span className="text-sm font-medium text-zinc-900 dark:text-white">
-                                                {format(new Date(entry.date), "EEEE, MMM d")}
-                                            </span>
-                                            <div className="flex gap-2">
-                                                {entry.hasImage && <ImageIcon className="w-3.5 h-3.5 text-zinc-400" />}
-                                                {entry.hasAudio && <Mic className="w-3.5 h-3.5 text-zinc-400" />}
-                                            </div>
+                                        <div className={cn(
+                                            "text-[10px] font-bold uppercase tracking-widest mb-1",
+                                            isSelected ? "text-white/70" : "text-zinc-400"
+                                        )}>
+                                            {format(entryDate, "EEEE, MMM d, yyyy")}
                                         </div>
-                                        <p className="text-xs text-zinc-500 dark:text-zinc-400 line-clamp-2 leading-relaxed italic">
-                                            {debouncedQuery ? highlightMatch(entry.content || "No entry", debouncedQuery) : (entry.content || "No entry")}
-                                        </p>
+                                        <div className={cn(
+                                            "text-sm leading-relaxed line-clamp-2",
+                                            isSelected ? "text-white" : "text-zinc-700 dark:text-zinc-300"
+                                        )}>
+                                            {entry.content}
+                                        </div>
+
+                                        {entry.media_items && entry.media_items.length > 0 && (
+                                            <div className="mt-3 space-y-2 flex flex-col items-start w-full" onClick={e => e.stopPropagation()}>
+                                                {/* Image Thumbnail */}
+                                                {entry.media_items.filter(item => item.type === "image").map((item, idx) => (
+                                                    <div key={idx} className="relative rounded-xl overflow-hidden border border-zinc-200/50 dark:border-zinc-800/50 w-full max-h-32 aspect-video bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center">
+                                                        <img 
+                                                            src={item.url} 
+                                                            alt="Attachment" 
+                                                            className="w-full h-full object-cover"
+                                                        />
+                                                    </div>
+                                                ))}
+
+                                                {/* Audio player */}
+                                                {entry.media_items.filter(item => item.type === "audio").map((item, idx) => (
+                                                    <CustomAudioPlayer 
+                                                        key={idx}
+                                                        url={item.url} 
+                                                        accentColor={accentColor}
+                                                        knownDuration={item.duration}
+                                                    />
+                                                ))}
+                                            </div>
+                                        )}
                                     </button>
                                 );
                             })}
-
-                            {/* Load More Indicator */}
-                            {isLoadingMore && (
-                                <div className="flex items-center justify-center py-4">
-                                    <Loader2 className="w-5 h-5 animate-spin text-zinc-400" />
-                                </div>
-                            )}
-
-                            {!hasMore && entries.length > 0 && (
-                                <div className="text-center py-4 text-xs text-zinc-400">
-                                    You've reached the beginning
-                                </div>
-                            )}
-                        </>
+                        </div>
                     )}
                 </div>
+
+                {/* Footer count */}
+                {!isLoading && filtered.length > 0 && (
+                    <div className="px-5 py-3 border-t border-zinc-100 dark:border-zinc-800 shrink-0">
+                        <p className="text-[10px] text-zinc-400 text-center font-medium">
+                            {filtered.length} {filtered.length === 1 ? "entry" : "entries"}
+                            {searchQuery ? " found" : " total"}
+                        </p>
+                    </div>
+                )}
             </div>
         </div>
     );
