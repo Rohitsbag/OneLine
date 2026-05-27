@@ -15,7 +15,8 @@ import {
     Moon,
     Shield,
     Zap,
-    Ghost
+    Ghost,
+    Sparkles
 } from 'lucide-react';
 import { cn } from "@/lib/utils";
 
