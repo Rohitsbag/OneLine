@@ -9,6 +9,7 @@ import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 import { useAuth } from "@/hooks/useAuth";
 import { callGemini } from "@/utils/ai";
 import { compressImageFile, uploadToSupabase, resolveMediaUrl } from "@/utils/media";
+import { useDropzone } from 'react-dropzone';
 
 interface JournalEditorProps {
     date: Date;
@@ -478,10 +479,7 @@ export function JournalEditor({
     }, [content]);
 
     // ── MEDIA OPERATIONS ──────────────────────────────────────────────────────
-    const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
+    const processImageFile = async (file: File) => {
         if (mediaItems.some(item => item.type === "image")) {
             alert("Only one photo is allowed. Please remove the existing photo first.");
             return;
@@ -518,9 +516,47 @@ export function JournalEditor({
             alert(`Failed to add photo: ${err.message || "Please try again."}`);
         } finally {
             setIsLoadingMedia(false);
-            e.target.value = ""; // clear selector
         }
     };
+
+    const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            await processImageFile(file);
+        }
+        e.target.value = ""; // clear selector
+    };
+
+    const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') !== -1) {
+                const file = items[i].getAsFile();
+                if (file) {
+                    e.preventDefault();
+                    await processImageFile(file);
+                    break; // Only process the first image pasted
+                }
+            }
+        }
+    };
+
+    const onDrop = useCallback(async (acceptedFiles: File[]) => {
+        const file = acceptedFiles[0];
+        if (file) {
+            await processImageFile(file);
+        }
+    }, [mediaItems, userId, isOnline, dateStr]);
+
+    const { getRootProps, getInputProps, isDragActive } = useDropzone({
+        onDrop,
+        accept: { 'image/*': [] },
+        noClick: true,
+        noKeyboard: true,
+        multiple: false
+    });
 
     const startRecording = async () => {
         if (mediaItems.some(item => item.type === "audio")) {
@@ -743,7 +779,25 @@ ${content}
             </div>
 
             {/* Editor Container */}
-            <div className="w-full bg-white dark:bg-zinc-900 rounded-3xl shadow-sm border border-zinc-100 dark:border-zinc-800 overflow-hidden flex flex-col relative">
+            <div 
+                {...getRootProps()} 
+                className={cn(
+                    "w-full bg-white dark:bg-zinc-900 rounded-3xl shadow-sm border border-zinc-100 dark:border-zinc-800 overflow-hidden flex flex-col relative transition-colors duration-300",
+                    isDragActive && "border-indigo-500 bg-indigo-50/10 dark:bg-indigo-950/20"
+                )}
+            >
+                <input {...getInputProps()} />
+                
+                {isDragActive && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border-2 border-dashed border-indigo-500 rounded-3xl animate-in fade-in duration-200">
+                        <div className="flex flex-col items-center gap-3">
+                            <div className="w-16 h-16 rounded-2xl bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center text-indigo-500 shadow-lg animate-bounce">
+                                <ImageIcon size={32} />
+                            </div>
+                            <span className="text-xl font-bold text-zinc-900 dark:text-white">Drop photo to attach</span>
+                        </div>
+                    </div>
+                )}
                 {isLoading ? (
                     <div className="flex items-center justify-center p-12">
                         <Loader2 className="w-5 h-5 animate-spin text-zinc-300" />
@@ -755,6 +809,7 @@ ${content}
                                 ref={textareaRef}
                                 value={content}
                                 onChange={handleChange}
+                                onPaste={handlePaste}
                                 placeholder="Write about your day…"
                                 className="w-full p-6 bg-transparent resize-none outline-none text-lg leading-relaxed text-zinc-800 dark:text-zinc-200 placeholder:text-zinc-300 dark:placeholder:text-zinc-700 font-light min-h-[220px]"
                             />
