@@ -10,7 +10,9 @@
 [![Powered by Supabase](https://img.shields.io/badge/Supabase-Backend-3ECF8E?style=flat&logo=supabase)](https://supabase.com)
 [![AI by Groq](https://img.shields.io/badge/Groq-Llama_3.3-F55036?style=flat)](https://groq.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Production Ready](https://img.shields.io/badge/Status-Production_Ready-success?style=flat)](https://github.com/Rohitsbag/OneLine)
+[![Production Ready](https://img.shields.io/badge/Status-Production_Ready-success?style=flat)](https://get-one-line.vercel.app/)
+
+### 🚀 [Try it Live: get-one-line.vercel.app](https://get-one-line.vercel.app/)
 
 
 **🚀 New**: Dual STT recording, offline-first UX, production-grade reliability
@@ -69,9 +71,10 @@ OneLine isn't just an app; it's a philosophy.
 
 ## 🎯 Recent Improvements (Production-Ready)
 
-### 🔒 **Production-Grade Reliability**
+### 🔒 **Production-Grade Reliability & Media**
+- **Hyper-Optimized Media:** Smart client-side image compression (80-95% size reduction) and efficient Opus 64kbps WebM audio encoding.
+- **Advanced Voice Recorder:** Real-time pause/resume functionality with an elegant pill-shaped UI and strict duration tracking.
 - **Dual STT Recording:** Browser Speech API runs in parallel as pre-computed backup (zero transcription loss)
-- **OCR Never Fails:** 3-tier fallback (Maverick → Scout → Tesseract.js)
 - **Smart Autosave:** 7-second debounce prevents API spam while ensuring data safety
 - **History Isolation:** Cross-date undo prevention (data corruption impossible)
 
