@@ -274,7 +274,9 @@ export function JournalEditor({
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
     const [isLoadingMedia, setIsLoadingMedia] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
+    const [isRecordingPaused, setIsRecordingPaused] = useState(false);
     const [recordingTime, setRecordingTime] = useState(0);
+    const recordingTimeRef = useRef(0);
 
     // AI Refinement states
     const [isRefining, setIsRefining] = useState(false);
@@ -327,7 +329,9 @@ export function JournalEditor({
         setRefinedContent(null);
         setShowRefinedPreview(false);
         setIsRecording(false);
+        setIsRecordingPaused(false);
         setRecordingTime(0);
+        recordingTimeRef.current = 0;
 
         // 1. Instant load from localStorage
         const cached = Storage.getJSONSync<any>(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr));
@@ -543,9 +547,8 @@ export function JournalEditor({
                 }
             };
 
-            const startTime = Date.now();
             recorder.onstop = async () => {
-                const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
+                const durationSeconds = Math.max(1, recordingTimeRef.current);
                 const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
                 stream.getTracks().forEach(track => track.stop()); // release micro
 
@@ -581,16 +584,22 @@ export function JournalEditor({
 
             recorder.start(250);
             setIsRecording(true);
+            setIsRecordingPaused(false);
             setRecordingTime(0);
+            recordingTimeRef.current = 0;
 
             if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
             recordingTimerRef.current = setInterval(() => {
+                if (mediaRecorderRef.current?.state === "paused") return; // Skip if paused
+
                 setRecordingTime(prev => {
-                    if (prev >= 299) { // 5-minute cap (300 seconds)
+                    const next = prev + 1;
+                    recordingTimeRef.current = next;
+                    if (next >= 299) { // 5-minute cap (300 seconds)
                         stopRecording();
                         return 300;
                     }
-                    return prev + 1;
+                    return next;
                 });
             }, 1000);
 
@@ -624,6 +633,17 @@ export function JournalEditor({
         setIsRecording(false);
         setRecordingTime(0);
         audioChunksRef.current = [];
+    };
+
+    const togglePauseRecording = () => {
+        if (!mediaRecorderRef.current) return;
+        if (isRecordingPaused) {
+            mediaRecorderRef.current.resume();
+            setIsRecordingPaused(false);
+        } else {
+            mediaRecorderRef.current.pause();
+            setIsRecordingPaused(true);
+        }
     };
 
     const handleRemoveMedia = (type: "image" | "audio") => {
@@ -871,13 +891,24 @@ ${content}
                         {isRecording && (
                             <div className="absolute inset-x-0 bottom-0 z-20 flex items-center justify-between px-6 py-4 bg-zinc-900 text-white animate-in slide-in-from-bottom-full duration-300">
                                 <div className="flex items-center gap-3">
-                                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping shrink-0" />
+                                    {!isRecordingPaused ? (
+                                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping shrink-0" />
+                                    ) : (
+                                        <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 shrink-0" />
+                                    )}
                                     <span className="text-sm font-semibold tracking-wider font-mono">
                                         Recording: {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, "0")}
                                     </span>
                                     <span className="text-xs text-zinc-400 shrink-0">(Max 5:00)</span>
                                 </div>
                                 <div className="flex gap-2">
+                                    <button
+                                        onClick={togglePauseRecording}
+                                        className="px-3 py-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all active:scale-95 flex items-center justify-center"
+                                        title={isRecordingPaused ? "Resume Recording" : "Pause Recording"}
+                                    >
+                                        {isRecordingPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                                    </button>
                                     <button
                                         onClick={stopRecording}
                                         className={cn("px-4 py-1.5 rounded-xl text-xs font-bold text-white cursor-pointer transition-all active:scale-95", accentColor)}
