@@ -46,6 +46,18 @@ OneLine isn't just an app; it's a philosophy.
 
 ---
 
+## 📉 The Philosophy of Simplification ("The Downgrade")
+
+In a world where apps constantly bloat themselves with trending features—Server Components, heavy AI Agents, Markdown Parsers, Social Feeds—OneLine took a deliberate step backward.
+
+We heavily "degraded" (simplified) our stack. We removed complex frameworks and bloated dependencies. Why? 
+Because **journaling requires reliability above all else.** 
+Adding a hundred cool features that nobody wants only makes the app heavy, fragile, and slow. We stripped away the noise to ensure that the core features—opening the app, typing your thoughts, and saving them—work absolutely perfectly, instantly, and reliably, even offline. 
+
+Complexity is easy. Simplicity is hard. We chose simplicity.
+
+---
+
 ## ✨ Features
 
 ### 📝 The Journal Editor
