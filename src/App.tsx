@@ -1,6 +1,7 @@
 import { Suspense, lazy } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { Storage, STORAGE_KEYS } from '@/utils/storage';
 
 // Lazy load pages for performance optimization
 export const loadAuthPage = () => import('@/pages/AuthPage');
@@ -19,13 +20,22 @@ const PageLoader = () => (
     </div>
 );
 
+// Route wrapper to redirect authenticated users to the journal app
+const PublicRoute = ({ children }: { children: React.ReactNode }) => {
+    const cachedUser = Storage.getJSONSync<{ id: string }>(STORAGE_KEYS.CACHED_USER);
+    if (cachedUser && cachedUser.id) {
+        return <Navigate to="/app" replace />;
+    }
+    return <>{children}</>;
+};
+
 function App() {
     return (
         <ErrorBoundary>
             <Suspense fallback={<PageLoader />}>
                 <Routes>
-                    <Route path="/" element={<LandingPage />} />
-                    <Route path="/auth" element={<AuthPage />} />
+                    <Route path="/" element={<PublicRoute><LandingPage /></PublicRoute>} />
+                    <Route path="/auth" element={<PublicRoute><AuthPage /></PublicRoute>} />
                     <Route
                         path="/app"
                         element={<JournalPage />}
@@ -39,3 +49,4 @@ function App() {
 }
 
 export default App;
+
