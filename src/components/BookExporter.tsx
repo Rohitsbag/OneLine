@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { format, parseISO } from "date-fns";
-import { BookOpen, Printer, Sparkles, Check, Image as ImageIcon, Layers } from "lucide-react";
+import { BookOpen, Printer, Check, Image as ImageIcon, Layers, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/utils/supabase/client";
 import { Storage } from "@/utils/storage";
@@ -21,59 +21,102 @@ interface BookExporterProps {
     isGuest?: boolean;
 }
 
+// Convert image URL (signed or blob) into Base64 Data URI for 100% reliable PDF embedding
+async function imageUrlToBase64(url: string): Promise<string | null> {
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                resolve(reader.result as string);
+            };
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+        });
+    } catch {
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            img.onload = () => {
+                try {
+                    const canvas = document.createElement("canvas");
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    const ctx = canvas.getContext("2d");
+                    if (ctx) {
+                        ctx.drawImage(img, 0, 0);
+                        resolve(canvas.toDataURL("image/jpeg", 0.9));
+                        return;
+                    }
+                } catch {}
+                resolve(null);
+            };
+            img.onerror = () => resolve(null);
+            img.src = url;
+        });
+    }
+}
+
 const THEME_CONFIGS: Record<BookTheme, {
     name: string;
     desc: string;
-    bgClass: string;
-    textClass: string;
-    accentClass: string;
+    bgHex: string;
+    textHex: string;
+    accentHex: string;
+    cardBg: string;
+    cardText: string;
     fontFamily: string;
-    previewBg: string;
 }> = {
     minimalist: {
         name: "Minimalist Clean",
         desc: "Pure white paper, crisp modern typography.",
-        bgClass: "bg-white",
-        textClass: "text-zinc-900",
-        accentClass: "text-zinc-500",
+        bgHex: "#ffffff",
+        textHex: "#18181b",
+        accentHex: "#71717a",
+        cardBg: "bg-white border-zinc-300",
+        cardText: "text-zinc-900",
         fontFamily: "font-sans",
-        previewBg: "bg-white border-zinc-200 text-zinc-900",
     },
     editorial: {
         name: "Classic Editorial",
         desc: "Warm parchment paper, rich serif typography.",
-        bgClass: "bg-[#FAF7F2]",
-        textClass: "text-[#2A2421]",
-        accentClass: "text-[#8C6D58]",
+        bgHex: "#FAF7F2",
+        textHex: "#2A2421",
+        accentHex: "#8C6D58",
+        cardBg: "bg-[#FAF7F2] border-[#E8DFC8]",
+        cardText: "text-[#2A2421]",
         fontFamily: "font-serif",
-        previewBg: "bg-[#FAF7F2] border-[#E8DFC8] text-[#2A2421]",
     },
     obsidian: {
         name: "Midnight Obsidian",
         desc: "Deep dark obsidian background, silver luxury text.",
-        bgClass: "bg-[#0D0D11]",
-        textClass: "text-zinc-100",
-        accentClass: "text-zinc-400",
+        bgHex: "#0D0D11",
+        textHex: "#f3f4f6",
+        accentHex: "#9ca3af",
+        cardBg: "bg-[#0D0D11] border-zinc-800",
+        cardText: "text-zinc-100",
         fontFamily: "font-sans",
-        previewBg: "bg-[#0D0D11] border-zinc-800 text-zinc-100",
     },
     botanical: {
         name: "Soft Botanical",
         desc: "Linen ivory paper with subtle sage green accents.",
-        bgClass: "bg-[#F8F9F5]",
-        textClass: "text-[#1C2826]",
-        accentClass: "text-[#3D6B5A]",
+        bgHex: "#F8F9F5",
+        textHex: "#1C2826",
+        accentHex: "#3D6B5A",
+        cardBg: "bg-[#F8F9F5] border-[#E0E5D8]",
+        cardText: "text-[#1C2826]",
         fontFamily: "font-serif",
-        previewBg: "bg-[#F8F9F5] border-[#E0E5D8] text-[#1C2826]",
     },
     coffee: {
         name: "Warm Coffee",
         desc: "Latte tone paper with warm espresso typography.",
-        bgClass: "bg-[#F5EFE6]",
-        textClass: "text-[#3C2A21]",
-        accentClass: "text-[#785237]",
+        bgHex: "#F5EFE6",
+        textHex: "#3C2A21",
+        accentHex: "#785237",
+        cardBg: "bg-[#F5EFE6] border-[#E5D4C0]",
+        cardText: "text-[#3C2A21]",
         fontFamily: "font-serif",
-        previewBg: "bg-[#F5EFE6] border-[#E5D4C0] text-[#3C2A21]",
     },
 };
 
@@ -170,31 +213,34 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                 return;
             }
 
-            setProgressPercent(50);
+            setProgressPercent(40);
             setProgressText(`Processing ${filtered.length} entries & media...`);
 
-            // 4. Resolve media signed URLs for images if enabled
+            // 4. Resolve media signed URLs and convert to Base64
             const processedEntries = await Promise.all(
                 filtered.map(async (entry, idx) => {
-                    if (idx % 10 === 0) {
-                        const p = 50 + Math.floor((idx / filtered.length) * 40);
+                    if (idx % 5 === 0) {
+                        const p = 40 + Math.floor((idx / filtered.length) * 50);
                         setProgressPercent(p);
-                        setProgressText(`Resolving photos (${idx}/${filtered.length})...`);
+                        setProgressText(`Embedding photos into PDF (${idx}/${filtered.length})...`);
                     }
 
-                    let imgUrl: string | null = null;
+                    let imgBase64: string | null = null;
                     if (includePhotos && entry.media_items) {
                         const imgItem = entry.media_items.find((item) => item.type === "image");
                         if (imgItem) {
                             try {
-                                imgUrl = await resolveMediaUrl(imgItem.url);
+                                const resolved = await resolveMediaUrl(imgItem.url);
+                                if (resolved) {
+                                    imgBase64 = await imageUrlToBase64(resolved);
+                                }
                             } catch {
-                                imgUrl = null;
+                                imgBase64 = null;
                             }
                         }
                     }
 
-                    return { ...entry, resolvedImgUrl: imgUrl };
+                    return { ...entry, resolvedImgUrl: imgBase64 };
                 })
             );
 
@@ -203,19 +249,13 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
 
             // 5. Construct Printable HTML Window
             const themeConfig = THEME_CONFIGS[theme];
-            const isDarkTheme = theme === "obsidian";
             const fontCss = themeConfig.fontFamily === "font-serif" 
                 ? "font-family: Georgia, Cambria, 'Times New Roman', Times, serif;" 
                 : "font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;";
 
-            const bgHex = theme === "minimalist" ? "#ffffff"
-                : theme === "editorial" ? "#FAF7F2"
-                : theme === "obsidian" ? "#0D0D11"
-                : theme === "botanical" ? "#F8F9F5"
-                : "#F5EFE6";
-
-            const textHex = theme === "obsidian" ? "#f3f4f6" : theme === "editorial" ? "#2A2421" : "#18181b";
-            const accentHex = theme === "editorial" ? "#8C6D58" : theme === "botanical" ? "#3D6B5A" : theme === "coffee" ? "#785237" : "#71717a";
+            const bgHex = themeConfig.bgHex;
+            const textHex = themeConfig.textHex;
+            const accentHex = themeConfig.accentHex;
 
             // Group entries by Month for Chapter Titles
             const monthGroups: Record<string, typeof processedEntries> = {};
@@ -234,93 +274,111 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                     <style>
                         @page {
                             size: A4 portrait;
-                            margin: 20mm 15mm 20mm 15mm;
+                            margin: 20mm 18mm 20mm 18mm;
+                        }
+                        * {
+                            box-sizing: border-box;
                         }
                         body {
-                            background-color: ${bgHex};
-                            color: ${textHex};
+                            background-color: ${bgHex} !important;
+                            color: ${textHex} !important;
                             ${fontCss}
                             margin: 0;
                             padding: 0;
-                            -webkit-print-color-adjust: exact;
-                            print-color-adjust: exact;
+                            -webkit-print-color-adjust: exact !important;
+                            print-color-adjust: exact !important;
                         }
                         .cover-page {
-                            height: 100vh;
+                            height: 90vh;
                             display: flex;
                             flex-direction: column;
                             align-items: center;
                             justify-content: center;
                             text-align: center;
                             page-break-after: always;
-                            box-sizing: border-box;
                             padding: 40px;
                         }
-                        .cover-title {
-                            font-size: 38px;
-                            font-weight: 700;
-                            letter-spacing: -0.02em;
-                            margin-bottom: 12px;
-                        }
-                        .cover-subtitle {
-                            font-size: 16px;
-                            color: ${accentHex};
-                            font-weight: 300;
-                            margin-bottom: 40px;
-                        }
                         .cover-emblem {
-                            width: 60px;
-                            height: 60px;
+                            width: 64px;
+                            height: 64px;
                             border: 2px solid ${accentHex};
                             border-radius: 50%;
                             display: flex;
                             align-items: center;
                             justify-content: center;
-                            margin-bottom: 40px;
-                            font-size: 24px;
+                            margin-bottom: 32px;
+                            font-size: 26px;
+                        }
+                        .cover-title {
+                            font-size: 36px;
+                            font-weight: 700;
+                            letter-spacing: -0.02em;
+                            margin-bottom: 12px;
+                            color: ${textHex};
+                        }
+                        .cover-subtitle {
+                            font-size: 15px;
+                            color: ${accentHex};
+                            font-weight: 400;
+                            margin-bottom: 48px;
                         }
                         .cover-meta {
-                            font-size: 13px;
+                            font-size: 11px;
                             color: ${accentHex};
-                            letter-spacing: 0.1em;
+                            letter-spacing: 0.15em;
                             text-transform: uppercase;
                         }
                         .month-section {
                             page-break-before: always;
-                            padding-top: 20px;
+                            padding-top: 10px;
                         }
                         .month-header {
-                            font-size: 24px;
-                            font-weight: 600;
+                            font-size: 22px;
+                            font-weight: 700;
                             border-bottom: 2px solid ${accentHex};
                             padding-bottom: 8px;
-                            margin-bottom: 28px;
+                            margin-bottom: 24px;
                             color: ${textHex};
+                            letter-spacing: 0.02em;
                         }
                         .entry-card {
-                            margin-bottom: ${density === "spacious" ? "32px" : "20px"};
+                            margin-bottom: ${density === "spacious" ? "28px" : "18px"};
                             page-break-inside: avoid;
                         }
                         .entry-date {
-                            font-size: 12px;
-                            font-weight: 600;
-                            letter-spacing: 0.08em;
+                            font-size: 11px;
+                            font-weight: 700;
+                            letter-spacing: 0.1em;
                             text-transform: uppercase;
                             color: ${accentHex};
-                            margin-bottom: 6px;
+                            margin-bottom: 4px;
                         }
                         .entry-text {
-                            font-size: ${density === "spacious" ? "16px" : "14px"};
-                            line-height: 1.6;
-                            margin: 0 0 10px 0;
-                            font-weight: 400;
+                            font-size: ${density === "spacious" ? "15px" : "13.5px"};
+                            line-height: 1.7;
+                            margin: 0 0 8px 0;
+                            color: ${textHex};
+                        }
+                        .entry-img-container {
+                            margin-top: 10px;
+                            margin-bottom: 12px;
+                            page-break-inside: avoid;
                         }
                         .entry-img {
-                            width: 100%;
-                            max-height: 300px;
-                            object-fit: cover;
-                            border-radius: 12px;
-                            margin-top: 8px;
+                            max-width: 100%;
+                            max-height: 380px;
+                            width: auto;
+                            height: auto;
+                            object-fit: contain;
+                            border-radius: 10px;
+                            border: 1px solid ${accentHex}44;
+                            display: block;
+                        }
+                        @media print {
+                            body {
+                                -webkit-print-color-adjust: exact !important;
+                                print-color-adjust: exact !important;
+                            }
                         }
                     </style>
                 </head>
@@ -341,7 +399,11 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                                 <div class="entry-card">
                                     <div class="entry-date">${format(parseISO(e.date), "EEEE, MMMM d, yyyy")}</div>
                                     ${e.content ? `<p class="entry-text">"${e.content}"</p>` : ""}
-                                    ${e.resolvedImgUrl ? `<img src="${e.resolvedImgUrl}" class="entry-img" />` : ""}
+                                    ${e.resolvedImgUrl ? `
+                                        <div class="entry-img-container">
+                                            <img src="${e.resolvedImgUrl}" class="entry-img" alt="Attached photo" />
+                                        </div>
+                                    ` : ""}
                                 </div>
                             `).join("")}
                         </div>
@@ -349,9 +411,23 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
 
                     <script>
                         window.onload = function() {
-                            setTimeout(function() {
-                                window.print();
-                            }, 500);
+                            var imgs = Array.from(document.images);
+                            var loaded = 0;
+                            if (imgs.length === 0) {
+                                setTimeout(function() { window.print(); }, 400);
+                                return;
+                            }
+                            imgs.forEach(function(img) {
+                                if (img.complete) {
+                                    loaded++;
+                                    if (loaded === imgs.length) setTimeout(function() { window.print(); }, 400);
+                                } else {
+                                    img.onload = img.onerror = function() {
+                                        loaded++;
+                                        if (loaded === imgs.length) setTimeout(function() { window.print(); }, 400);
+                                    };
+                                }
+                            });
                         }
                     </script>
                 </body>
@@ -377,10 +453,10 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
     };
 
     return (
-        <div className="w-full max-w-3xl bg-zinc-900/80 border border-zinc-800 rounded-3xl p-6 sm:p-8 backdrop-blur-xl text-white shadow-2xl">
+        <div className="w-full max-w-3xl bg-zinc-900/90 border border-zinc-800 rounded-3xl p-6 sm:p-8 backdrop-blur-xl text-white shadow-2xl">
             {/* Header Title */}
             <div className="flex items-center gap-3 mb-6 border-b border-zinc-800 pb-4">
-                <div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                <div className="p-3 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
                     <BookOpen className="w-6 h-6" />
                 </div>
                 <div>
@@ -389,6 +465,14 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                         Format your journal entries into a publication-grade print-ready PDF book.
                     </p>
                 </div>
+            </div>
+
+            {/* Print Tip Banner */}
+            <div className="mb-6 p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-start gap-3 text-xs text-amber-300">
+                <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                    <strong>Print Tip:</strong> In your browser print popup, make sure to check <strong>"Background graphics"</strong> under Options so your background theme colors & photos render perfectly in your PDF!
+                </span>
             </div>
 
             {/* Configurator Form */}
@@ -476,26 +560,27 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                                     type="button"
                                     onClick={() => setTheme(tKey)}
                                     className={cn(
-                                        "p-3.5 rounded-2xl border text-left transition-all relative flex flex-col justify-between h-24",
-                                        cfg.previewBg,
-                                        isSelected ? "ring-2 ring-indigo-500 border-transparent shadow-lg scale-[1.02]" : "opacity-75 hover:opacity-100"
+                                        "p-4 rounded-2xl border text-left transition-all relative flex flex-col justify-between h-28 cursor-pointer shadow-md",
+                                        cfg.cardBg,
+                                        cfg.cardText,
+                                        isSelected ? "ring-2 ring-amber-500 border-transparent scale-[1.02]" : "opacity-85 hover:opacity-100"
                                     )}
                                 >
                                     <div>
                                         <div className="flex items-center justify-between">
                                             <span className="font-bold text-xs">{cfg.name}</span>
                                             {isSelected && (
-                                                <span className="w-4 h-4 rounded-full bg-indigo-500 text-white flex items-center justify-center">
-                                                    <Check className="w-2.5 h-2.5" />
+                                                <span className="w-4 h-4 rounded-full bg-amber-500 text-zinc-950 flex items-center justify-center">
+                                                    <Check className="w-2.5 h-2.5 stroke-[3]" />
                                                 </span>
                                             )}
                                         </div>
-                                        <p className="text-[10px] opacity-75 mt-1 font-light leading-tight">
+                                        <p className="text-[10px] opacity-80 mt-1 font-light leading-tight">
                                             {cfg.desc}
                                         </p>
                                     </div>
-                                    <span className="text-[9px] uppercase tracking-widest font-mono opacity-50">
-                                        Sample Text
+                                    <span className="text-[9px] uppercase tracking-widest font-mono opacity-60">
+                                        Sample Theme
                                     </span>
                                 </button>
                             );
@@ -544,7 +629,7 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                                 className={cn(
                                     "flex-1 py-2 px-3 rounded-xl text-xs font-medium border transition-colors flex items-center justify-center gap-1.5",
                                     density === "spacious"
-                                        ? "bg-white text-zinc-950 border-white"
+                                        ? "bg-white text-zinc-950 border-white font-semibold"
                                         : "bg-zinc-800/40 text-zinc-400 border-zinc-700/50"
                                 )}
                             >
@@ -557,7 +642,7 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                                 className={cn(
                                     "flex-1 py-2 px-3 rounded-xl text-xs font-medium border transition-colors flex items-center justify-center gap-1.5",
                                     density === "compact"
-                                        ? "bg-white text-zinc-950 border-white"
+                                        ? "bg-white text-zinc-950 border-white font-semibold"
                                         : "bg-zinc-800/40 text-zinc-400 border-zinc-700/50"
                                 )}
                             >
@@ -577,7 +662,7 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                             className={cn(
                                 "w-full py-2 px-3 rounded-xl text-xs font-medium border transition-colors flex items-center justify-center gap-2",
                                 includePhotos
-                                    ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/40"
+                                    ? "bg-amber-500/20 text-amber-300 border-amber-500/40 font-semibold"
                                     : "bg-zinc-800/40 text-zinc-400 border-zinc-700/50"
                             )}
                         >
@@ -589,14 +674,14 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
 
                 {/* Progress bar during compilation */}
                 {isGenerating && (
-                    <div className="p-4 bg-zinc-950/80 rounded-2xl border border-indigo-500/30 animate-in fade-in">
+                    <div className="p-4 bg-zinc-950/80 rounded-2xl border border-amber-500/30 animate-in fade-in">
                         <div className="flex items-center justify-between text-xs mb-2">
-                            <span className="text-indigo-300 font-mono">{progressText}</span>
+                            <span className="text-amber-300 font-mono">{progressText}</span>
                             <span className="text-zinc-400 font-mono">{progressPercent}%</span>
                         </div>
                         <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
                             <div
-                                className="bg-indigo-500 h-full transition-all duration-300"
+                                className="bg-amber-500 h-full transition-all duration-300"
                                 style={{ width: `${progressPercent}%` }}
                             />
                         </div>
@@ -611,7 +696,7 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                     className="w-full py-3.5 rounded-2xl bg-white text-zinc-950 font-bold text-sm shadow-xl hover:bg-zinc-100 transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                 >
                     <Printer className="w-4 h-4" />
-                    <span>{isGenerating ? "Compiling Book..." : "Generate & Export Book (PDF / Print)"}</span>
+                    <span>{isGenerating ? "Embedding Photos & Compiling..." : "Generate & Export Book (PDF / Print)"}</span>
                 </button>
             </div>
         </div>
