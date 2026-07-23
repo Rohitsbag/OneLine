@@ -1,4 +1,4 @@
-import { Calendar, Settings, Sun, Moon, Clock, Sparkles } from "lucide-react";
+import { Calendar, Settings, Sun, Moon, Clock, Sparkles, Film } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { useState, useRef, useEffect } from "react";
@@ -8,6 +8,7 @@ interface HeaderProps {
     onOpenSettings: () => void;
     onOpenTimeline: () => void;
     onOpenReflection: () => void;
+    onOpenCinematic?: () => void;
     isDark: boolean;
     toggleTheme: () => void;
     accentColor?: string;
@@ -18,6 +19,7 @@ export function Header({
     onOpenSettings,
     onOpenTimeline,
     onOpenReflection,
+    onOpenCinematic,
     isDark,
     toggleTheme,
     accentColor = "bg-indigo-500",
@@ -42,6 +44,7 @@ export function Header({
         { icon: Calendar, label: "Calendar", onClick: onOpenCalendar },
         { icon: Clock, label: "Timeline", onClick: onOpenTimeline },
         { icon: Sparkles, label: "AI Reflection", onClick: onOpenReflection },
+        ...(onOpenCinematic ? [{ icon: Film, label: "Cinematic Mode", onClick: onOpenCinematic }] : []),
         { icon: Settings, label: "Settings", onClick: onOpenSettings },
         { icon: isDark ? Sun : Moon, label: isDark ? "Light Mode" : "Dark Mode", onClick: toggleTheme },
     ];
