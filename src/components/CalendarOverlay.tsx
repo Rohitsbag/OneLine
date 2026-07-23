@@ -6,6 +6,7 @@ import { ACCENT_COLORS } from "@/constants/colors";
 import { supabase } from "@/utils/supabase/client";
 
 import { Storage } from "@/utils/storage";
+import { journalStore } from "@/utils/journalStore";
 
 interface CalendarOverlayProps {
     isOpen: boolean;
@@ -30,6 +31,16 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
             setViewDate(initialViewDate || selectedDate);
         }
     }, [isOpen, initialViewDate, selectedDate]);
+
+    // Real-time listener for journal store entry updates
+    useEffect(() => {
+        const unsubscribe = journalStore.subscribe((dateStr, entry) => {
+            if (entry && (entry.content?.trim() || entry.media_items?.length)) {
+                setEntryDates(prev => new Set([...prev, dateStr]));
+            }
+        });
+        return unsubscribe;
+    }, []);
 
     // Fetch entry dates for the current month
     useEffect(() => {
@@ -58,28 +69,37 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
                 console.error("Error loading cached dates:", e);
             }
 
-            // Then try to fetch from Supabase (if online and has valid userId)
-            if (!navigator.onLine || !userId) return; // Skip network call if offline or guest mode
+            // Then try to fetch from Supabase (if online and valid user ID)
+            let activeUid = userId;
+            if (!activeUid) {
+                const cachedUser = Storage.getJSONSync<any>(STORAGE_KEYS.CACHED_USER);
+                if (cachedUser?.id) activeUid = cachedUser.id;
+            }
+
+            if (!navigator.onLine || !activeUid) return;
 
             try {
                 const { data, error } = await supabase
                     .from('entries')
-                    .select('date, content')
-                    .eq('user_id', userId)
+                    .select('date, content, media_items')
+                    .eq('user_id', activeUid)
                     .gte('date', format(monthStart, 'yyyy-MM-dd'))
-                    .lte('date', format(monthEnd, 'yyyy-MM-dd'))
-                    .not('content', 'is', null);
+                    .lte('date', format(monthEnd, 'yyyy-MM-dd'));
 
                 if (!error && data) {
-                    // Only include entries with non-empty content (after trimming whitespace)
-                    const datesWithContent = data
-                        .filter(e => e.content && e.content.trim().length > 0)
-                        .map(e => e.date);
-                    setEntryDates(new Set(datesWithContent));
+                    const serverDates: string[] = [];
+                    for (const e of data) {
+                        if (e.content?.trim() || (e.media_items && e.media_items.length > 0)) {
+                            serverDates.push(e.date);
+                            // Cache to localStorage so JournalEditor & offline modes have entry immediately
+                            Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(activeUid, e.date), e);
+                        }
+                    }
+                    setEntryDates(prev => new Set([...prev, ...serverDates]));
                 }
             } catch (e) {
                 // Network error - keep using cached dates
-                console.log("Calendar: Using cached dates (offline)");
+                console.log("Calendar: Using cached dates (offline)", e);
             }
         };
 

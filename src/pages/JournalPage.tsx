@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { addDays, subDays } from "date-fns";
 import { Header } from "@/components/Header";
 import { JournalEditor } from "@/components/JournalEditor";
 import { TimelineView } from "@/components/TimelineView";
@@ -29,6 +30,34 @@ export function JournalPage() {
         if (saved) return saved === "dark";
         return window.matchMedia("(prefers-color-scheme: dark)").matches;
     });
+
+    // Keyboard Shortcuts (Cmd/Ctrl + Left/Right/T/K)
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            const isMod = e.metaKey || e.ctrlKey;
+            if (!isMod) return;
+
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                setSelectedDate(prev => subDays(prev, 1));
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                setSelectedDate(prev => {
+                    const next = addDays(prev, 1);
+                    return next > new Date() ? prev : next;
+                });
+            } else if (e.key === 't' || e.key === 'T') {
+                e.preventDefault();
+                setSelectedDate(new Date());
+            } else if (e.key === 'k' || e.key === 'K') {
+                e.preventDefault();
+                setShowTimeline(prev => !prev);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
 
     // The earliest date a user can navigate to
     const minDate = userCreatedAt

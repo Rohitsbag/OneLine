@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Loader2, Sparkles, Image as ImageIcon, Mic, Trash2, Play, Pause } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Sparkles, Image as ImageIcon, Mic, Trash2, Play, Pause, Expand } from "lucide-react";
 import { format, addDays, subDays, isSameDay } from "date-fns";
 import { supabase } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,19 @@ import { useAuth } from "@/hooks/useAuth";
 import { callGemini } from "@/utils/ai";
 import { compressImageFile, uploadToSupabase, resolveMediaUrl } from "@/utils/media";
 import { useDropzone } from 'react-dropzone';
+import { CustomAudioPlayer } from "@/components/CustomAudioPlayer";
+import { PhotoLightbox } from "@/components/PhotoLightbox";
+import { journalStore } from "@/utils/journalStore";
+
+export { CustomAudioPlayer };
+
+const THOUGHT_PROMPTS = [
+    "Write about your day…",
+    "What made you smile for 5 seconds today?",
+    "One victory, big or small...",
+    "What's one thing you learned today?",
+    "A moment you want to remember forever...",
+];
 
 interface JournalEditorProps {
     date: Date;
@@ -26,231 +39,6 @@ interface MediaItem {
     duration?: number;
 }
 
-/**
- * Reusable, premium HTML5 custom audio player card.
- * Integrates flawlessly with active system accent themes and dark mode layouts.
- */
-export function CustomAudioPlayer({
-    url,
-    onRemove,
-    accentColor,
-    knownDuration,
-}: {
-    url: string;
-    onRemove?: () => void;
-    accentColor: string;
-    knownDuration?: number;
-}) {
-    const audioRef = useRef<HTMLAudioElement>(null);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [progress, setProgress] = useState(0);
-    const [currentTime, setCurrentTime] = useState("0:00");
-    const [durationStr, setDurationStr] = useState("");
-    const [isEnded, setIsEnded] = useState(false);
-
-    const accentObj = ACCENT_COLORS.find((a) => a.bgClass === accentColor) || ACCENT_COLORS[0];
-
-    const formatTime = (secs: number) => {
-        if (isNaN(secs) || !isFinite(secs) || secs < 0) return "0:00";
-        const m = Math.floor(secs / 60);
-        const s = Math.floor(secs % 60).toString().padStart(2, "0");
-        return `${m}:${s}`;
-    };
-
-    const togglePlay = () => {
-        if (!audioRef.current) return;
-        if (isPlaying) {
-            audioRef.current.pause();
-        } else {
-            if (audioRef.current.ended || isEnded) {
-                audioRef.current.currentTime = 0;
-                setIsEnded(false);
-            }
-            audioRef.current.play().catch((e) => console.error("Audio play error:", e));
-        }
-    };
-
-    const [durationHackRunning, setDurationHackRunning] = useState(false);
-
-    // Watch for duration changes (this fires when the hack completes and Chrome discovers the true length)
-    useEffect(() => {
-        const audio = audioRef.current;
-        if (!audio) return;
-        const handleDurationChange = () => {
-            if (audio.duration && isFinite(audio.duration) && !durationStr) {
-                setDurationStr(formatTime(audio.duration));
-            }
-        };
-        audio.addEventListener('durationchange', handleDurationChange);
-        return () => audio.removeEventListener('durationchange', handleDurationChange);
-    }, [durationStr]);
-
-    const handleTimeUpdate = () => {
-        if (!audioRef.current || durationHackRunning) return;
-        const cur = audioRef.current.currentTime;
-        const dur = (audioRef.current.duration && isFinite(audioRef.current.duration)) 
-            ? audioRef.current.duration 
-            : knownDuration || 0;
-            
-        setCurrentTime(formatTime(cur));
-        if (dur && dur > 0) {
-            setProgress((cur / dur) * 100);
-        } else {
-            setProgress(0);
-        }
-    };
-
-    const handleLoadedMetadata = () => {
-        if (!audioRef.current) return;
-        const dur = audioRef.current.duration;
-        if (dur && isFinite(dur)) {
-            setDurationStr(formatTime(dur));
-        } else if (!knownDuration && !durationHackRunning) {
-            // WebM Infinity duration workaround: seek to the end so browser calculates true duration
-            setDurationHackRunning(true);
-            audioRef.current.currentTime = 1e8; // seek to end
-            const onSeeked = () => {
-                if (audioRef.current) {
-                    audioRef.current.currentTime = 0; // return to start
-                    audioRef.current.removeEventListener('seeked', onSeeked);
-                }
-                setDurationHackRunning(false);
-            };
-            audioRef.current.addEventListener('seeked', onSeeked);
-        }
-    };
-
-    const handleEnded = () => {
-        setIsPlaying(false);
-        setIsEnded(true);
-        setProgress(0);
-        setCurrentTime("0:00");
-        if (audioRef.current) {
-            audioRef.current.currentTime = 0;
-        }
-    };
-
-    const handleScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!audioRef.current) return;
-        const pct = parseFloat(e.target.value);
-        const dur = (audioRef.current.duration && isFinite(audioRef.current.duration)) 
-            ? audioRef.current.duration 
-            : knownDuration || 0;
-            
-        if (dur && dur > 0) {
-            audioRef.current.currentTime = (pct / 100) * dur;
-            setProgress(pct);
-        }
-    };
-
-    const effectiveDurationStr = durationStr || (knownDuration ? formatTime(knownDuration) : "");
-    const showDuration = effectiveDurationStr && effectiveDurationStr !== "0:00" && !effectiveDurationStr.includes("NaN");
-
-    // Determine what to show in the time label
-    let timeLabel = currentTime;
-    if (showDuration) {
-        if (!isPlaying && progress === 0) {
-            timeLabel = effectiveDurationStr; // Show only duration before they start playing
-        } else {
-            timeLabel = `${currentTime} / ${effectiveDurationStr}`; // Show both during playback
-        }
-    }
-
-    return (
-        <div className="w-full max-w-md relative group rounded-[24px] border border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2 pr-4 flex items-center gap-3 shadow-sm hover:shadow-md transition-all duration-300 animate-in fade-in shrink-0">
-            {/* Custom Range Slider Stylesheet */}
-            <style>{`
-                .custom-seekbar {
-                    -webkit-appearance: none;
-                    appearance: none;
-                    background: transparent;
-                    width: 100%;
-                    height: 24px;
-                    cursor: pointer;
-                }
-                .custom-seekbar:focus {
-                    outline: none;
-                }
-                .custom-seekbar::-webkit-slider-runnable-track {
-                    width: 100%;
-                    height: 4px;
-                    background: #e4e4e7;
-                    border-radius: 2px;
-                }
-                .dark .custom-seekbar::-webkit-slider-runnable-track {
-                    background: #27272a;
-                }
-                .custom-seekbar::-webkit-slider-thumb {
-                    height: 12px;
-                    width: 12px;
-                    border-radius: 50%;
-                    background: currentColor;
-                    -webkit-appearance: none;
-                    margin-top: -4px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    transition: transform 0.1s ease;
-                }
-                .custom-seekbar::-webkit-slider-thumb:hover {
-                    transform: scale(1.25);
-                }
-            `}</style>
-
-            <audio
-                ref={audioRef}
-                src={url}
-                onPlay={() => { setIsPlaying(true); setIsEnded(false); }}
-                onPause={() => setIsPlaying(false)}
-                onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={handleLoadedMetadata}
-                onEnded={handleEnded}
-            />
-
-            {/* Play Button */}
-            <button
-                onClick={togglePlay}
-                className={cn(
-                    "w-10 h-10 rounded-full flex items-center justify-center text-white shadow-sm transition-transform active:scale-95 shrink-0",
-                    accentObj.bgClass,
-                    accentObj.hoverBgClass
-                )}
-            >
-                {isPlaying ? (
-                    <Pause className="w-4 h-4 fill-white text-white shrink-0" />
-                ) : (
-                    <Play className="w-4 h-4 fill-white text-white translate-x-0.5 shrink-0" />
-                )}
-            </button>
-
-            {/* Scrubber & Time */}
-            <div className="flex-1 min-w-0 flex items-center gap-3">
-                <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={progress}
-                    onChange={handleScrub}
-                    disabled={!showDuration}
-                    className={cn("custom-seekbar", accentObj.class, !showDuration && "opacity-50 cursor-not-allowed")}
-                />
-                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 font-mono min-w-[32px] text-right shrink-0 whitespace-nowrap">
-                    {timeLabel}
-                </span>
-            </div>
-
-            {/* Remove Button */}
-            {onRemove && (
-                <button
-                    onClick={onRemove}
-                    className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-red-50 dark:hover:bg-red-950/30 text-zinc-400 hover:text-red-500 transition-colors shrink-0 active:scale-90"
-                    title="Remove voice note"
-                >
-                    <Trash2 className="w-4 h-4 shrink-0" />
-                </button>
-            )}
-        </div>
-    );
-}
-
 export function JournalEditor({
     date,
     onDateChange,
@@ -265,6 +53,9 @@ export function JournalEditor({
     const { connected: isOnline } = useNetworkStatus();
     const { userId } = useAuth();
     const effectiveId = userId || "guest";
+
+    const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+    const placeholderPrompt = useRef(THOUGHT_PROMPTS[Math.floor(Math.random() * THOUGHT_PROMPTS.length)]).current;
 
     const [entryId, setEntryId] = useState<string | null>(null);
     const [content, setContent] = useState("");
@@ -352,7 +143,13 @@ export function JournalEditor({
         }
 
         // 2. Refresh from Supabase in background (if logged in + online)
-        if (userId && isOnline) {
+        let activeUid = userId;
+        if (!activeUid) {
+            const cachedUser = Storage.getJSONSync<any>(STORAGE_KEYS.CACHED_USER);
+            if (cachedUser?.id) activeUid = cachedUser.id;
+        }
+
+        if (activeUid && isOnline) {
             try {
                 abortRef.current?.abort();
                 abortRef.current = new AbortController();
@@ -360,7 +157,7 @@ export function JournalEditor({
                 const fetchPromise = supabase
                     .from("entries")
                     .select("id, content, media_items, updated_at")
-                    .eq("user_id", userId)
+                    .eq("user_id", activeUid)
                     .eq("date", dateStr)
                     .abortSignal(abortRef.current.signal)
                     .maybeSingle();
@@ -380,6 +177,7 @@ export function JournalEditor({
                     setMediaItems(resolvedServer);
                     setSyncStatus("synced");
                     Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr), data);
+                    Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(activeUid, dateStr), data);
                 }
             } catch (e: any) {
                 if (e.name !== "AbortError") console.warn("[Editor] Supabase refresh error:", e);
@@ -412,6 +210,7 @@ export function JournalEditor({
             updated_at: new Date().toISOString(),
         };
         await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr), localRecord);
+        journalStore.notifyUpdate(dateStr, localRecord);
 
         if (!userId || !isOnline) {
             setSyncStatus("local");
@@ -821,7 +620,7 @@ ${content}
                                 value={content}
                                 onChange={handleChange}
                                 onPaste={handlePaste}
-                                placeholder="Write about your day…"
+                                placeholder={placeholderPrompt}
                                 className="w-full p-6 bg-transparent resize-none outline-none text-lg leading-relaxed text-zinc-800 dark:text-zinc-200 placeholder:text-zinc-300 dark:placeholder:text-zinc-700 font-light min-h-[220px]"
                             />
                             
@@ -854,15 +653,25 @@ ${content}
                             <div className="border-t border-zinc-100 dark:border-zinc-800 p-6 bg-zinc-50/50 dark:bg-zinc-950/20 grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 {/* Photo Preview */}
                                 {mediaItems.filter(item => item.type === "image").map((item, idx) => (
-                                    <div key={idx} className="relative group rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-955 shadow-sm aspect-video max-h-48 flex items-center justify-center transition-all hover:shadow-md">
+                                    <div 
+                                        key={idx} 
+                                        onClick={() => setLightboxSrc(item.url)}
+                                        className="relative group rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-955 shadow-sm aspect-video max-h-48 flex items-center justify-center transition-all hover:shadow-md cursor-pointer"
+                                    >
                                         <img 
                                             src={item.url} 
                                             alt="Attached moment" 
                                             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                                         />
+                                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/25 transition-colors flex items-center justify-center pointer-events-none">
+                                            <Expand className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md" />
+                                        </div>
                                         <button
-                                            onClick={() => handleRemoveMedia("image")}
-                                            className="absolute top-3 right-3 p-2 rounded-xl bg-black/60 hover:bg-black/85 text-white transition-all cursor-pointer shadow-md active:scale-90"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleRemoveMedia("image");
+                                            }}
+                                            className="absolute top-3 right-3 p-2 rounded-xl bg-black/60 hover:bg-black/85 text-white transition-all cursor-pointer shadow-md active:scale-90 z-10"
                                             title="Remove photo"
                                         >
                                             <Trash2 className="w-4 h-4 shrink-0" />
@@ -993,6 +802,8 @@ ${content}
                     </>
                 )}
             </div>
+
+            <PhotoLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
         </div>
     );
 }

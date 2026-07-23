@@ -7,6 +7,7 @@ import { Storage, STORAGE_KEYS } from "@/utils/storage";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { resolveMediaUrl } from "@/utils/media";
 import { CustomAudioPlayer } from "./JournalEditor";
+import { journalStore } from "@/utils/journalStore";
 
 interface Entry {
     date: string;
@@ -118,6 +119,13 @@ export function TimelineView({
             setSearchQuery("");
             loadEntries();
         }
+    }, [isOpen, loadEntries]);
+
+    useEffect(() => {
+        const unsubscribe = journalStore.subscribe(() => {
+            if (isOpen) loadEntries();
+        });
+        return unsubscribe;
     }, [isOpen, loadEntries]);
 
     const filtered = searchQuery.trim()
