@@ -45,8 +45,7 @@ export function Header({
     const menuItems = [
         { icon: Calendar, label: "Calendar", onClick: onOpenCalendar },
         { icon: Clock, label: "Timeline", onClick: onOpenTimeline },
-        { icon: Sparkles, label: "AI Reflection", onClick: onOpenReflection },
-        ...(onOpenStudio ? [{ icon: Sparkles, label: "Studio & Memories", onClick: onOpenStudio }] : []),
+        ...(onOpenStudio ? [{ icon: Sparkles, label: "Studio", onClick: onOpenStudio }] : []),
         { icon: Settings, label: "Settings", onClick: onOpenSettings },
         { icon: isDark ? Sun : Moon, label: isDark ? "Light Mode" : "Dark Mode", onClick: toggleTheme },
     ];
@@ -71,15 +70,15 @@ export function Header({
                 </button>
 
                 {showMenu && (
-                    <div className="absolute right-0 top-full mt-2 w-44 bg-white dark:bg-zinc-900 rounded-2xl shadow-xl border border-zinc-200 dark:border-zinc-800 py-2 animate-in fade-in zoom-in-95 duration-150">
+                    <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-zinc-900 rounded-2xl shadow-xl border border-zinc-200 dark:border-zinc-800 py-2 animate-in fade-in zoom-in-95 duration-150">
                         {menuItems.map((item) => (
                             <button
                                 key={item.label}
                                 onClick={() => { item.onClick(); setShowMenu(false); }}
-                                className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors group"
+                                className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors group cursor-pointer"
                             >
-                                <item.icon className={cn("w-4 h-4 text-zinc-400 transition-colors", hoverTextClass)} />
-                                <span className="font-medium">{item.label}</span>
+                                <item.icon className={cn("w-4 h-4 text-zinc-400 shrink-0 transition-colors", hoverTextClass)} />
+                                <span className="font-medium whitespace-nowrap">{item.label}</span>
                             </button>
                         ))}
                     </div>
