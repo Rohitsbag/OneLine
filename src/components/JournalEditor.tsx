@@ -335,7 +335,7 @@ export function JournalEditor({
         recordingTimeRef.current = 0;
 
         // 1. Instant load from localStorage
-        const cached = Storage.getJSONSync<any>(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr));
+        const cached = Storage.getEntryCacheSync<any>(effectiveId, dateStr);
         setContent(cached?.content || "");
         setEntryId(cached?.id || null);
         setMediaItems(cached?.media_items || []);

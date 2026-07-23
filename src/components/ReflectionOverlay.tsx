@@ -63,7 +63,7 @@ export function ReflectionOverlay({
                 const dateStr = format(d, "yyyy-MM-dd");
                 
                 // Read from local storage
-                const cached = Storage.getJSONSync<any>(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr));
+                const cached = Storage.getEntryCacheSync<any>(effectiveId, dateStr);
                 if (cached?.content?.trim()) {
                     gatheredEntries.push({ date: dateStr, content: cached.content.trim() });
                 }

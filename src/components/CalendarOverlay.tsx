@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { supabase } from "@/utils/supabase/client";
 
+import { Storage } from "@/utils/storage";
+
 interface CalendarOverlayProps {
     isOpen: boolean;
     onClose: () => void;
@@ -40,22 +42,12 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
             // OFFLINE-FIRST: Load from localStorage cache first
             const cachedDates = new Set<string>();
             try {
-                // Scan localStorage for cached entries in this month's range
                 const monthDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
-                const cacheUid = userId || 'null';
                 monthDays.forEach(day => {
                     const dateStr = format(day, 'yyyy-MM-dd');
-                    const cacheKey = `entry_cache_${cacheUid}_${dateStr}`;
-                    const cached = localStorage.getItem(cacheKey);
-                    if (cached) {
-                        try {
-                            const entry = JSON.parse(cached);
-                            if (entry.content && entry.content.trim().length > 0) {
-                                cachedDates.add(dateStr);
-                            }
-                        } catch (e) {
-                            // Ignore corrupted cache
-                        }
+                    const entry = Storage.getEntryCacheSync<any>(userId, dateStr);
+                    if (entry && (entry.content?.trim() || entry.media_items?.length)) {
+                        cachedDates.add(dateStr);
                     }
                 });
                 // Set cached dates immediately for instant UI

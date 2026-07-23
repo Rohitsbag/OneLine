@@ -66,11 +66,11 @@ export function TimelineView({
             const d = new Date(now);
             d.setDate(d.getDate() - i);
             const dateStr = format(d, "yyyy-MM-dd");
-            const cached = Storage.getJSONSync<any>(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr));
-            if (cached?.content?.trim()) {
+            const cached = Storage.getEntryCacheSync<any>(effectiveId, dateStr);
+            if (cached?.content?.trim() || cached?.media_items?.length) {
                 localEntries.push({ 
                     date: dateStr, 
-                    content: cached.content.trim(),
+                    content: cached.content?.trim() || "",
                     media_items: cached.media_items
                 });
             }
