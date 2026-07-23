@@ -8,6 +8,7 @@ import { SettingsOverlay } from "@/components/SettingsOverlay";
 import { SignInModal } from "@/components/SignInModal";
 import { ReflectionOverlay } from "@/components/ReflectionOverlay";
 import { CinematicOverlay } from "@/components/CinematicOverlay";
+import { StudioOverlay } from "@/components/StudioOverlay";
 import { Storage, STORAGE_KEYS } from "@/utils/storage";
 import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 import { useAuth } from "@/hooks/useAuth";
@@ -24,6 +25,7 @@ export function JournalPage() {
     const [showTimeline, setShowTimeline] = useState(false);
     const [showReflection, setShowReflection] = useState(false);
     const [showCinematic, setShowCinematic] = useState(false);
+    const [showStudio, setShowStudio] = useState(false);
     const [showAuthModal, setShowAuthModal] = useState(false);
     const [selectedDate, setSelectedDate] = useState(new Date());
 
@@ -96,6 +98,7 @@ export function JournalPage() {
                 onOpenTimeline={() => setShowTimeline(true)}
                 onOpenReflection={() => setShowReflection(true)}
                 onOpenCinematic={() => setShowCinematic(true)}
+                onOpenStudio={() => setShowStudio(true)}
                 isDark={isDark}
                 toggleTheme={() => setIsDark(!isDark)}
                 accentColor={settings.accent_color}
@@ -149,6 +152,14 @@ export function JournalPage() {
             <CinematicOverlay
                 isOpen={showCinematic}
                 onClose={() => setShowCinematic(false)}
+                userId={userId || ""}
+                isGuest={isGuest}
+            />
+
+            <StudioOverlay
+                isOpen={showStudio}
+                onClose={() => setShowStudio(false)}
+                onLaunchCinematic={() => setShowCinematic(true)}
                 userId={userId || ""}
                 isGuest={isGuest}
             />

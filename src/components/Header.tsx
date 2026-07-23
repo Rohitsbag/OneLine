@@ -9,6 +9,7 @@ interface HeaderProps {
     onOpenTimeline: () => void;
     onOpenReflection: () => void;
     onOpenCinematic?: () => void;
+    onOpenStudio?: () => void;
     isDark: boolean;
     toggleTheme: () => void;
     accentColor?: string;
@@ -20,6 +21,7 @@ export function Header({
     onOpenTimeline,
     onOpenReflection,
     onOpenCinematic,
+    onOpenStudio,
     isDark,
     toggleTheme,
     accentColor = "bg-indigo-500",
@@ -44,7 +46,7 @@ export function Header({
         { icon: Calendar, label: "Calendar", onClick: onOpenCalendar },
         { icon: Clock, label: "Timeline", onClick: onOpenTimeline },
         { icon: Sparkles, label: "AI Reflection", onClick: onOpenReflection },
-        ...(onOpenCinematic ? [{ icon: Film, label: "Cinematic Mode", onClick: onOpenCinematic }] : []),
+        ...(onOpenStudio ? [{ icon: Sparkles, label: "Studio & Memories", onClick: onOpenStudio }] : []),
         { icon: Settings, label: "Settings", onClick: onOpenSettings },
         { icon: isDark ? Sun : Moon, label: isDark ? "Light Mode" : "Dark Mode", onClick: toggleTheme },
     ];
