@@ -30,7 +30,7 @@ export function CinematicOverlay({ isOpen, onClose, userId, isGuest = false }: C
     const [direction, setDirection] = useState<"rewind" | "chronological">("rewind");
     const [autoPlayVoice, setAutoPlayVoice] = useState(true);
     const [playAmbient, setPlayAmbient] = useState(false);
-    const [speed, setSpeed] = useState<1 | 1.5 | 2>(1);
+    const [speed, setSpeed] = useState<0.5 | 1 | 1.5 | 2>(1);
 
     const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null);
     const [resolvedAudioUrl, setResolvedAudioUrl] = useState<string | null>(null);
@@ -215,17 +215,8 @@ export function CinematicOverlay({ isOpen, onClose, userId, isGuest = false }: C
             <audio ref={ambientAudioRef} src="/ambient/ambient.mp3" loop />
             <audio ref={voiceAudioRef} />
 
-            {/* Top Navigation Bar */}
-            <div className="w-full max-w-4xl flex items-center justify-between z-10">
-                <div className="flex items-center gap-3">
-                    <span className="text-xs font-mono tracking-wider uppercase px-3 py-1 rounded-full bg-white/10 text-white/90 border border-white/15 backdrop-blur-md">
-                        🎬 Cinematic Mode
-                    </span>
-                    <span className="text-xs font-medium text-zinc-400 hidden sm:inline">
-                        {direction === "rewind" ? "Rewind (Today → Past)" : "Chronological (Past → Today)"}
-                    </span>
-                </div>
-
+            {/* Top Navigation Bar - Clean, Minimalist Close Button */}
+            <div className="w-full max-w-4xl flex items-center justify-end z-10">
                 <button
                     onClick={onClose}
                     className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center backdrop-blur-md transition-all active:scale-90"
@@ -311,7 +302,7 @@ export function CinematicOverlay({ isOpen, onClose, userId, isGuest = false }: C
 
                 <div className="h-4 w-px bg-white/15 mx-1 hidden sm:block" />
 
-                {/* Direction Toggle */}
+                {/* Direction Toggle: Rewind vs Forward */}
                 <button
                     onClick={() => setDirection(prev => prev === "rewind" ? "chronological" : "rewind")}
                     className={cn(
@@ -320,10 +311,10 @@ export function CinematicOverlay({ isOpen, onClose, userId, isGuest = false }: C
                             ? "bg-white/10 text-white border-white/20"
                             : "bg-indigo-500/20 text-indigo-300 border-indigo-500/30"
                     )}
-                    title="Toggle Direction (Rewind vs Chronological)"
+                    title={direction === "rewind" ? "Playing Newest to Oldest (Rewind)" : "Playing Oldest to Newest (Forward)"}
                 >
                     <ArrowRightLeft className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">{direction === "rewind" ? "Rewind" : "Chrono"}</span>
+                    <span className="hidden sm:inline">{direction === "rewind" ? "Rewind" : "Forward"}</span>
                 </button>
 
                 {/* Voice Auto-Play Toggle */}
@@ -350,11 +341,11 @@ export function CinematicOverlay({ isOpen, onClose, userId, isGuest = false }: C
                     {playAmbient ? <Music className="w-4 h-4 text-indigo-400" /> : <VolumeX className="w-4 h-4" />}
                 </button>
 
-                {/* Speed Selector */}
+                {/* Speed Selector (0.5x, 1x, 1.5x, 2x) */}
                 <button
-                    onClick={() => setSpeed(prev => (prev === 1 ? 1.5 : prev === 1.5 ? 2 : 1))}
+                    onClick={() => setSpeed(prev => (prev === 0.5 ? 1 : prev === 1 ? 1.5 : prev === 1.5 ? 2 : 0.5))}
                     className="px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-mono border border-white/15 transition-colors"
-                    title="Playback Speed"
+                    title="Playback Speed (0.5x, 1x, 1.5x, 2x)"
                 >
                     {speed}x
                 </button>
