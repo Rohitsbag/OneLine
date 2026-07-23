@@ -160,6 +160,7 @@ export function JournalPage() {
                 isOpen={showStudio}
                 onClose={() => setShowStudio(false)}
                 onLaunchCinematic={() => setShowCinematic(true)}
+                onLaunchReflection={() => setShowReflection(true)}
                 userId={userId || ""}
                 isGuest={isGuest}
             />
