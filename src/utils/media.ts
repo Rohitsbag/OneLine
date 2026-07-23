@@ -99,10 +99,16 @@ export async function resolveMediaUrl(url: string): Promise<string> {
         try {
             const filePath = url.split('/storage/v1/object/public/journal-media-private/')[1];
             
-            // Create a signed URL valid for 7 days
-            const { data, error } = await supabase.storage
+            // Create a signed URL valid for 7 days with a 4 second timeout fallback
+            const signPromise = supabase.storage
                 .from('journal-media-private')
                 .createSignedUrl(filePath, 86400 * 7);
+
+            const timeoutPromise = new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('timeout')), 4000)
+            );
+
+            const { data, error } = await Promise.race([signPromise, timeoutPromise]) as any;
                 
             if (!error && data?.signedUrl) {
                 return data.signedUrl;
@@ -110,9 +116,10 @@ export async function resolveMediaUrl(url: string): Promise<string> {
                 console.warn('[media] Supabase createSignedUrl error:', error);
             }
         } catch (e) {
-            console.error('[media] Dynamic signed URL resolver crashed:', e);
+            console.error('[media] Dynamic signed URL resolver crashed or timed out:', e);
         }
     }
 
     return url;
 }
+

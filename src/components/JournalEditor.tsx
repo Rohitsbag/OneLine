@@ -338,25 +338,38 @@ export function JournalEditor({
         const cached = Storage.getJSONSync<any>(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr));
         setContent(cached?.content || "");
         setEntryId(cached?.id || null);
-        
-        // Resolve cache URLs to valid signed URLs
-        const resolvedLocal = await resolveItemsUrls(cached?.media_items || []);
-        setMediaItems(resolvedLocal);
+        setMediaItems(cached?.media_items || []);
         setSyncStatus("synced");
 
-        // 2. Refresh from Supabase (if logged in + online)
+        // Unblock UI immediately so editor is instant and interactive
+        setIsLoading(false);
+
+        // Asynchronously resolve local media signed URLs in the background
+        if (cached?.media_items?.length) {
+            resolveItemsUrls(cached.media_items).then((resolvedLocal) => {
+                setMediaItems(resolvedLocal);
+            }).catch((e) => console.warn("[Editor] Local media resolve error:", e));
+        }
+
+        // 2. Refresh from Supabase in background (if logged in + online)
         if (userId && isOnline) {
             try {
                 abortRef.current?.abort();
                 abortRef.current = new AbortController();
 
-                const { data, error } = await supabase
+                const fetchPromise = supabase
                     .from("entries")
                     .select("id, content, media_items, updated_at")
                     .eq("user_id", userId)
                     .eq("date", dateStr)
                     .abortSignal(abortRef.current.signal)
                     .maybeSingle();
+
+                const timeoutPromise = new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error("network_timeout")), 5000)
+                );
+
+                const { data, error } = await Promise.race([fetchPromise, timeoutPromise]) as any;
 
                 if (!error && data && !isDirtyRef.current) {
                     setContent(data.content || "");
@@ -369,11 +382,9 @@ export function JournalEditor({
                     Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr), data);
                 }
             } catch (e: any) {
-                if (e.name !== "AbortError") console.error("[Editor] Load error:", e);
+                if (e.name !== "AbortError") console.warn("[Editor] Supabase refresh error:", e);
             }
         }
-
-        setIsLoading(false);
     }, [effectiveId, userId, dateStr, isOnline]);
 
     useEffect(() => {
