@@ -4,8 +4,16 @@ const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemi
  * Call Google Gemini API (gemini-flash-latest) to generate text content.
  * Fallbacks to the default key provided by user if environment variable is not set.
  */
+const LEAKED_KEYS = [
+    "AIzaSyCUsT6z1Cmicq1bGEDAmTjwP1KIfq1_kbQ"
+];
+const DEFAULT_WORKING_KEY = "AIzaSyDas-UU7agAjyQeHDag1yOMU6qyXuxIWBE";
+
 export async function callGemini(prompt: string): Promise<string> {
-    const key = import.meta.env.VITE_GEMINI_API_KEY || "AIzaSyDas-UU7agAjyQeHDag1yOMU6qyXuxIWBE";
+    let key = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!key || LEAKED_KEYS.includes(key.trim())) {
+        key = DEFAULT_WORKING_KEY;
+    }
 
     try {
         const res = await fetch(`${GEMINI_URL}`, {
