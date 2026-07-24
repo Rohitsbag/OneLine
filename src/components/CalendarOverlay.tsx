@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { supabase } from "@/utils/supabase/client";
 
-import { Storage } from "@/utils/storage";
+import { Storage, STORAGE_KEYS } from "@/utils/storage";
 import { journalStore } from "@/utils/journalStore";
 
 interface CalendarOverlayProps {

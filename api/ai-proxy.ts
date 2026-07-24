@@ -1,10 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// GROQ API Configuration
+// API Configuration
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 
-
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
 
 // Allowed models for security
 const ALLOWED_CHAT_MODELS = [
@@ -33,16 +34,71 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(405).json({ error: "Method not allowed" });
     }
 
-    // Check GROQ API key
-    if (!GROQ_API_KEY) {
-        console.error("GROQ_API_KEY not configured");
-        return res.status(500).json({ error: "Server configuration error" });
-    }
-
     try {
         const body = req.body;
 
+        if (body.action === "gemini") {
+            // Gemini Proxy Action
+            if (!GEMINI_API_KEY) {
+                console.error("GEMINI_API_KEY not configured on server");
+                return res.status(500).json({ error: "GEMINI_API_KEY server configuration error" });
+            }
+
+            if (!body.prompt) {
+                return res.status(400).json({ error: "Prompt is required" });
+            }
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+            try {
+                const response = await fetch(GEMINI_URL, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-goog-api-key": GEMINI_API_KEY,
+                    },
+                    body: JSON.stringify({
+                        contents: [
+                            {
+                                parts: [
+                                    {
+                                        text: body.prompt,
+                                    },
+                                ],
+                            },
+                        ],
+                    }),
+                    signal: controller.signal,
+                });
+
+                clearTimeout(timeoutId);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    console.error("Gemini API Error:", data);
+                    return res.status(response.status).json({
+                        error: data.error?.message || "Gemini API error"
+                    });
+                }
+
+                const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                return res.status(200).json({ text });
+            } catch (fetchError: any) {
+                clearTimeout(timeoutId);
+                if (fetchError.name === 'AbortError') {
+                    return res.status(504).json({ error: "Gemini API request timeout" });
+                }
+                throw fetchError;
+            }
+        }
+
         if (body.action === "chat") {
+            // Check GROQ API key for chat
+            if (!GROQ_API_KEY) {
+                console.error("GROQ_API_KEY not configured");
+                return res.status(500).json({ error: "GROQ_API_KEY server configuration error" });
+            }
             // Chat Completions (for OCR)
             const requestedModel = body.model;
             const modelToUse = ALLOWED_CHAT_MODELS.includes(requestedModel)
