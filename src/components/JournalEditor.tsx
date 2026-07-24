@@ -514,15 +514,43 @@ export function JournalEditor({
         if (!content.trim()) return;
         setIsRefining(true);
         try {
-            const prompt = `Politely clean up spelling, punctuation, grammar, and sentence flow of the following daily journal entry, while retaining the exact core message, tone, first-person perspective, and personal details. Do NOT summarize it or change its style to be overly verbose or artificial. Keep it natural, warm, and authentic.
+            const prompt = `You are a personal journal text refiner. Clean up spelling, grammar, punctuation, and flow of the following journal entry while preserving the writer's authentic voice and first-person perspective.
 
-Journal Entry:
+STRICT OUTPUT CONSTRAINTS (CRITICAL):
+- Output ONLY the raw polished journal entry text.
+- NEVER include conversational intros or preambles (e.g. "Here is...", "Here's the clean version:").
+- NEVER include explanatory notes, warnings, or tips at the end (e.g. "*(Note: ...)*").
+- NEVER wrap the text in quotation marks ("...") or markdown blockquotes (>).
+- NEVER wrap the text in markdown code fences (\`\`\`).
+
+Original Journal Entry:
 """
 ${content}
 """`;
             const result = await callGemini(prompt);
-            if (result.trim()) {
-                setRefinedContent(result.trim());
+            let cleaned = result.trim();
+
+            // 1. Strip markdown code fences
+            if (cleaned.startsWith("```")) {
+                cleaned = cleaned.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/i, "").trim();
+            }
+            // 2. Strip conversational preambles ending in a colon (e.g. "Here is...", "Refined Entry:")
+            const lines = cleaned.split("\n");
+            if (lines.length > 1 && /^(Sure|Here|Refined|Cleaned|Updated|Polished|Below|Certainly)[\s\S]*:\s*$/i.test(lines[0].trim())) {
+                lines.shift();
+                cleaned = lines.join("\n").trim();
+            } else {
+                cleaned = cleaned.replace(/^(Sure[!,.]?\s*)?(Here (is|are)|Here's|Refined entry|Cleaned-up entry|Polished version)[\s\S]*?:\s*/i, "").trim();
+            }
+            // 3. Strip trailing notes/parentheticals (e.g. *(Note: ...)*, (Note: ...), Note: ...)
+            cleaned = cleaned.replace(/\n+\s*[\*\(\[]*\s*Note:[\s\S]*$/i, "").trim();
+            // 4. Strip leading blockquote markers ('> ') line by line
+            cleaned = cleaned.split("\n").map(line => line.replace(/^>\s?/, "").trim()).join("\n").trim();
+            // 5. Strip surrounding quotation marks if present
+            cleaned = cleaned.replace(/^["'«“]+/, "").replace(/["'»”]+$/, "").trim();
+
+            if (cleaned) {
+                setRefinedContent(cleaned);
                 setShowRefinedPreview(true);
             }
         } catch (e) {

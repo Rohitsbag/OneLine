@@ -5,7 +5,7 @@ const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemi
  * Fallbacks to the default key provided by user if environment variable is not set.
  */
 export async function callGemini(prompt: string): Promise<string> {
-    const key = import.meta.env.VITE_GEMINI_API_KEY || "AIzaSyCUsT6z1Cmicq1bGEDAmTjwP1KIfq1_kbQ";
+    const key = import.meta.env.VITE_GEMINI_API_KEY || "AIzaSyDas-UU7agAjyQeHDag1yOMU6qyXuxIWBE";
 
     try {
         const res = await fetch(`${GEMINI_URL}`, {
