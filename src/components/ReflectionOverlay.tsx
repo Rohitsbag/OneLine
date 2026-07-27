@@ -72,11 +72,12 @@ export function ReflectionOverlay({
             // 2. Fetch from Supabase as fallback/refresh if logged in and online
             if (!isGuest && userId && navigator.onLine) {
                 try {
+                    const thirtyDaysAgo = subDays(now, 30);
                     const { data, error: sbError } = await supabase
                         .from("entries")
                         .select("date, content")
                         .eq("user_id", userId)
-                        .gte("date", format(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), "yyyy-MM-dd"))
+                        .gte("date", format(thirtyDaysAgo, "yyyy-MM-dd"))
                         .not("content", "is", null)
                         .neq("content", "");
 

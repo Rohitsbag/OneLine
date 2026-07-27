@@ -18,7 +18,6 @@ const isValidCachedUser = (data: unknown): data is CachedUser => {
     );
 };
 
-/** Wraps a promise with a timeout. Rejects with 'timeout' if exceeded. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('timeout')), ms);
@@ -29,7 +28,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
     });
 }
 
-export function useAuth(_isOnline?: boolean) {
+export function useAuth() {
     const [state, setState] = useState<{
         userId: string | null;
         userEmail: string | null;
@@ -48,11 +47,10 @@ export function useAuth(_isOnline?: boolean) {
         let mounted = true;
 
         const init = async () => {
-            // 1. Try cached user first (instant) - this is the primary path
+            // 1. Try cached user first (instant)
             const cached = await Storage.getJSON<CachedUser>(STORAGE_KEYS.CACHED_USER);
 
             if (cached && isValidCachedUser(cached)) {
-                // Immediately resolve with cached data - don't wait for network
                 if (mounted) {
                     setState({
                         userId: cached.id,
@@ -63,12 +61,11 @@ export function useAuth(_isOnline?: boolean) {
                     });
                 }
 
-                // Background: Try to verify/refresh session without blocking UI
-                // Use a short timeout so a dead backend doesn't stall anything
+                // Background: verify session — if unreachable, stay with cache (don't flip to guest)
                 try {
                     const { data: { session } } = await withTimeout(
                         supabase.auth.getSession(),
-                        5000 // 5 second timeout max
+                        5000
                     );
 
                     if (session?.user && mounted) {
@@ -86,24 +83,18 @@ export function useAuth(_isOnline?: boolean) {
                             createdAt: userData.created_at
                         });
                     } else if (!session && mounted) {
-                        // Session expired - clear cache, go to guest
+                        // Session truly expired — clear cache and go to guest
                         await Storage.remove(STORAGE_KEYS.CACHED_USER);
-                        setState({
-                            userId: null,
-                            userEmail: null,
-                            isGuest: true,
-                            isLoading: false,
-                            createdAt: null
-                        });
+                        setState({ userId: null, userEmail: null, isGuest: true, isLoading: false, createdAt: null });
                     }
                 } catch {
-                    // Backend unreachable or timeout - stay with cached user, no UI change needed
+                    // Backend unreachable — keep using cached session, do not flip to guest
                     console.warn('[useAuth] Backend unreachable, using cached session');
                 }
                 return;
             }
 
-            // 2. No cached user - try to get session with short timeout
+            // 2. No cache — try live session
             try {
                 const { data: { session } } = await withTimeout(
                     supabase.auth.getSession(),
@@ -125,32 +116,18 @@ export function useAuth(_isOnline?: boolean) {
                         createdAt: userData.created_at
                     });
                 } else if (mounted) {
-                    setState({
-                        userId: null,
-                        userEmail: null,
-                        isGuest: true,
-                        isLoading: false,
-                        createdAt: null
-                    });
+                    setState({ userId: null, userEmail: null, isGuest: true, isLoading: false, createdAt: null });
                 }
             } catch {
-                // Backend unreachable - go to guest mode immediately
                 console.warn('[useAuth] Backend unreachable, entering guest mode');
                 if (mounted) {
-                    setState({
-                        userId: null,
-                        userEmail: null,
-                        isGuest: true,
-                        isLoading: false,
-                        createdAt: null
-                    });
+                    setState({ userId: null, userEmail: null, isGuest: true, isLoading: false, createdAt: null });
                 }
             }
         };
 
         init();
 
-        // Auth state listener for sign-in / sign-out events
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
             async (event, session) => {
                 if (!mounted) return;
@@ -171,13 +148,7 @@ export function useAuth(_isOnline?: boolean) {
                     });
                 } else if (event === 'SIGNED_OUT') {
                     await Storage.remove(STORAGE_KEYS.CACHED_USER);
-                    setState({
-                        userId: null,
-                        userEmail: null,
-                        isGuest: true,
-                        isLoading: false,
-                        createdAt: null
-                    });
+                    setState({ userId: null, userEmail: null, isGuest: true, isLoading: false, createdAt: null });
                 }
             }
         );
@@ -186,7 +157,7 @@ export function useAuth(_isOnline?: boolean) {
             mounted = false;
             subscription.unsubscribe();
         };
-    }, []); // Run only once on mount - no dependencies that cause re-runs
+    }, []);
 
     return state;
 }

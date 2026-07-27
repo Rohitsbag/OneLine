@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { addDays, subDays } from "date-fns";
+import { addDays, subDays, format } from "date-fns";
 import { Header } from "@/components/Header";
 import { JournalEditor } from "@/components/JournalEditor";
 import { TimelineView } from "@/components/TimelineView";
@@ -35,11 +35,22 @@ export function JournalPage() {
         return window.matchMedia("(prefers-color-scheme: dark)").matches;
     });
 
+    // Track whether any modal is open — used to suppress keyboard shortcuts
+    const anyModalOpen = showCalendar || showSettings || showTimeline ||
+        showReflection || showCinematic || showStudio || showAuthModal;
+
     // Keyboard Shortcuts (Cmd/Ctrl + Left/Right/T/K)
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             const isMod = e.metaKey || e.ctrlKey;
             if (!isMod) return;
+
+            // Don't hijack shortcuts when user is typing in a text field
+            const tag = (document.activeElement as HTMLElement)?.tagName?.toLowerCase();
+            if (tag === 'textarea' || tag === 'input') return;
+
+            // Don't fire date navigation when a modal is open
+            if (anyModalOpen && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
 
             if (e.key === 'ArrowLeft') {
                 e.preventDefault();
@@ -61,9 +72,8 @@ export function JournalPage() {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, []);
+    }, [anyModalOpen]);
 
-    // The earliest date a user can navigate to
     const minDate = userCreatedAt
         ? new Date(userCreatedAt)
         : new Date(new Date().setFullYear(new Date().getFullYear() - 10));
@@ -106,7 +116,7 @@ export function JournalPage() {
 
             <div className={`flex-1 w-full ${!isOnline ? "mt-8" : ""}`}>
                 <JournalEditor
-                    key={selectedDate.toISOString()}
+                    key={format(selectedDate, "yyyy-MM-dd")}
                     date={selectedDate}
                     onDateChange={setSelectedDate}
                     minDate={minDate}

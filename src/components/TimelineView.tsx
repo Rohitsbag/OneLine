@@ -60,14 +60,20 @@ export function TimelineView({
     const loadEntries = useCallback(async () => {
         setIsLoading(true);
 
-        // Load from localStorage cache
+        if (isGuest || !userId) {
+            setEntries([]);
+            setIsLoading(false);
+            return;
+        }
+
+        // Fast load from localStorage cache without locking main thread
         const localEntries: Entry[] = [];
         const now = new Date();
         for (let i = 0; i < 365; i++) {
             const d = new Date(now);
             d.setDate(d.getDate() - i);
             const dateStr = format(d, "yyyy-MM-dd");
-            const cached = Storage.getEntryCacheSync<any>(effectiveId, dateStr);
+            const cached = Storage.getEntryCacheSync<any>(userId, dateStr);
             if (cached?.content?.trim() || cached?.media_items?.length) {
                 localEntries.push({ 
                     date: dateStr, 
@@ -81,8 +87,8 @@ export function TimelineView({
         setEntries(resolvedLocal);
         setIsLoading(false);
 
-        // If logged in, fetch from Supabase and merge
-        if (!isGuest && userId && navigator.onLine) {
+        // Fetch up to 200 recent entries from Supabase
+        if (navigator.onLine) {
             try {
                 const { data, error } = await supabase
                     .from("entries")
@@ -94,11 +100,9 @@ export function TimelineView({
                     .limit(200);
 
                 if (!error && data) {
-                    // Cache all fetched entries locally
                     for (const e of data) {
-                        await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, e.date), e);
+                        Storage.setJSONSync(STORAGE_KEYS.ENTRY_CACHE(userId, e.date), e);
                     }
-                    // Merge: server data takes precedence
                     const serverDates = new Set(data.map(e => e.date));
                     const merged = [
                         ...data,
@@ -108,11 +112,11 @@ export function TimelineView({
                     const resolvedMerged = await resolveEntriesMedia(merged);
                     setEntries(resolvedMerged);
                 }
-            } catch {
-                // Silently fail — localStorage data already shown
+            } catch (err) {
+                console.warn("[TimelineView] Supabase fetch error:", err);
             }
         }
-    }, [effectiveId, userId, isGuest]);
+    }, [isGuest, userId]);
 
     useEffect(() => {
         if (isOpen) {

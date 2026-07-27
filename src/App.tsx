@@ -29,6 +29,15 @@ const PublicRoute = ({ children }: { children: React.ReactNode }) => {
     return <>{children}</>;
 };
 
+// Protected route wrapper to redirect guests/unauthenticated users to auth
+const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+    const cachedUser = Storage.getJSONSync<{ id: string }>(STORAGE_KEYS.CACHED_USER);
+    if (!cachedUser || !cachedUser.id) {
+        return <Navigate to="/auth" replace />;
+    }
+    return <>{children}</>;
+};
+
 function App() {
     return (
         <ErrorBoundary>
@@ -38,7 +47,7 @@ function App() {
                     <Route path="/auth" element={<PublicRoute><AuthPage /></PublicRoute>} />
                     <Route
                         path="/app"
-                        element={<JournalPage />}
+                        element={<ProtectedRoute><JournalPage /></ProtectedRoute>}
                     />
                     <Route path="/privacy" element={<PrivacyPolicy />} />
                     <Route path="/terms" element={<TermsOfService />} />

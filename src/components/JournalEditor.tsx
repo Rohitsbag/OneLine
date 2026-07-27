@@ -52,7 +52,8 @@ export function JournalEditor({
 
     const { connected: isOnline } = useNetworkStatus();
     const { userId } = useAuth();
-    const effectiveId = userId || "guest";
+    // Guest users have no effectiveId — we never write to localStorage for guests
+    const isGuestMode = !userId;
 
     const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
     const placeholderPrompt = useRef(THOUGHT_PROMPTS[Math.floor(Math.random() * THOUGHT_PROMPTS.length)]).current;
@@ -81,6 +82,10 @@ export function JournalEditor({
     const isDirtyRef = useRef(false);
     const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const abortRef = useRef<AbortController | null>(null);
+    // Always-current ref to saveEntry to avoid stale closures in debounce timers
+    const saveEntryRef = useRef<(() => Promise<void>) | null>(null);
+    // Track blob URLs for cleanup on unmount
+    const blobUrlsRef = useRef<Set<string>>(new Set());
 
     // Recording refs
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -95,10 +100,13 @@ export function JournalEditor({
         mediaItemsRef.current = mediaItems;
     }, [mediaItems]);
 
-    // Cleanup recording timer on unmount
+    // Cleanup recording timer and all blob URLs on unmount
     useEffect(() => {
         return () => {
             if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+            // Revoke all tracked blob URLs to prevent memory leaks
+            blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+            blobUrlsRef.current.clear();
         };
     }, []);
 
@@ -114,6 +122,82 @@ export function JournalEditor({
         );
     };
 
+    // ── SAVE ──────────────────────────────────────────────────────────────────
+    const saveEntry = useCallback(async () => {
+        // Never persist anything for guest users
+        if (!userId) return;
+
+        const text = contentRef.current;
+        const items = mediaItemsRef.current.map(item => ({
+            type: item.type,
+            url: item.originalUrl || item.url,
+            ...(item.duration ? { duration: item.duration } : {})
+        }));
+
+        // Always write synchronously to localStorage first
+        const localRecord = {
+            id: entryId,
+            content: text,
+            date: dateStr,
+            media_items: items,
+            updated_at: new Date().toISOString(),
+        };
+        Storage.setJSONSync(STORAGE_KEYS.ENTRY_CACHE(userId, dateStr), localRecord);
+        journalStore.notifyUpdate(dateStr, localRecord);
+
+        if (!isOnline) {
+            setSyncStatus("local");
+            isDirtyRef.current = false;
+            return;
+        }
+
+        // Then sync to Supabase
+        try {
+            if (entryId) {
+                const { error } = await supabase
+                    .from("entries")
+                    .update({
+                        content: text,
+                        media_items: items,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq("id", entryId);
+                if (error) throw error;
+            } else {
+                const { data, error } = await supabase
+                    .from("entries")
+                    .upsert(
+                        {
+                            user_id: userId,
+                            date: dateStr,
+                            content: text,
+                            media_items: items,
+                            updated_at: new Date().toISOString()
+                        },
+                        { onConflict: "user_id,date" }
+                    )
+                    .select("id")
+                    .single();
+                if (error) throw error;
+                if (data?.id) {
+                    setEntryId(data.id);
+                    const updatedRecord = { ...localRecord, id: data.id };
+                    Storage.setJSONSync(STORAGE_KEYS.ENTRY_CACHE(userId, dateStr), updatedRecord);
+                }
+            }
+            setSyncStatus("synced");
+        } catch {
+            setSyncStatus("error");
+        }
+
+        isDirtyRef.current = false;
+    }, [userId, dateStr, entryId, isOnline]);
+
+    // Keep ref current so debounce timers always call the latest version
+    useEffect(() => {
+        saveEntryRef.current = saveEntry;
+    }, [saveEntry]);
+
     // ── LOAD ──────────────────────────────────────────────────────────────────
     const loadEntry = useCallback(async () => {
         setIsLoading(true);
@@ -125,31 +209,28 @@ export function JournalEditor({
         setRecordingTime(0);
         recordingTimeRef.current = 0;
 
-        // 1. Instant load from localStorage
-        const cached = Storage.getEntryCacheSync<any>(effectiveId, dateStr);
-        setContent(cached?.content || "");
+        // 1. Instant load from localStorage (only for authenticated users)
+        const cached = userId ? Storage.getEntryCacheSync<any>(userId, dateStr) : null;
+        const cachedContent = cached?.content || "";
+        const cachedMedia = cached?.media_items || [];
+
+        setContent(cachedContent);
         setEntryId(cached?.id || null);
-        setMediaItems(cached?.media_items || []);
+        setMediaItems(cachedMedia);
         setSyncStatus("synced");
 
-        // Unblock UI immediately so editor is instant and interactive
+        // Unblock UI immediately
         setIsLoading(false);
 
-        // Asynchronously resolve local media signed URLs in the background
-        if (cached?.media_items?.length) {
-            resolveItemsUrls(cached.media_items).then((resolvedLocal) => {
+        // Asynchronously resolve local media signed URLs
+        if (cachedMedia.length) {
+            resolveItemsUrls(cachedMedia).then((resolvedLocal) => {
                 setMediaItems(resolvedLocal);
             }).catch((e) => console.warn("[Editor] Local media resolve error:", e));
         }
 
-        // 2. Refresh from Supabase in background (if logged in + online)
-        let activeUid = userId;
-        if (!activeUid) {
-            const cachedUser = Storage.getJSONSync<any>(STORAGE_KEYS.CACHED_USER);
-            if (cachedUser?.id) activeUid = cachedUser.id;
-        }
-
-        if (activeUid && isOnline) {
+        // 2. Refresh from Supabase in background (only if logged in + online)
+        if (userId && isOnline) {
             try {
                 abortRef.current?.abort();
                 abortRef.current = new AbortController();
@@ -157,7 +238,7 @@ export function JournalEditor({
                 const fetchPromise = supabase
                     .from("entries")
                     .select("id, content, media_items, updated_at")
-                    .eq("user_id", activeUid)
+                    .eq("user_id", userId)
                     .eq("date", dateStr)
                     .abortSignal(abortRef.current.signal)
                     .maybeSingle();
@@ -168,117 +249,86 @@ export function JournalEditor({
 
                 const { data, error } = await Promise.race([fetchPromise, timeoutPromise]) as any;
 
-                if (!error && data && !isDirtyRef.current) {
-                    setContent(data.content || "");
-                    setEntryId(data.id);
-                    
-                    // Resolve public Supabase URLs to secure signed URLs
-                    const resolvedServer = await resolveItemsUrls(data.media_items || []);
-                    setMediaItems(resolvedServer);
-                    setSyncStatus("synced");
-                    Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr), data);
-                    Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(activeUid, dateStr), data);
+                if (!error && !isDirtyRef.current) {
+                    const serverHasData = Boolean(data && (data.content?.trim() || data.media_items?.length));
+                    const localHasData = Boolean(cachedContent.trim() || cachedMedia.length);
+
+                    if (data && (serverHasData || !localHasData)) {
+                        setContent(data.content || "");
+                        setEntryId(data.id);
+                        const resolvedServer = await resolveItemsUrls(data.media_items || []);
+                        setMediaItems(resolvedServer);
+                        setSyncStatus("synced");
+                        Storage.setJSONSync(STORAGE_KEYS.ENTRY_CACHE(userId, dateStr), data);
+                    } else if (localHasData && (!data || !serverHasData)) {
+                        // Local has unsynced content — push it up
+                        console.log("[Editor] Pushing unsynced local entry to server:", dateStr);
+                        setTimeout(() => saveEntryRef.current?.(), 100);
+                    }
                 }
             } catch (e: any) {
                 if (e.name !== "AbortError") console.warn("[Editor] Supabase refresh error:", e);
             }
         }
-    }, [effectiveId, userId, dateStr, isOnline]);
+    }, [userId, dateStr, isOnline]);
 
     useEffect(() => {
         loadEntry();
         return () => { abortRef.current?.abort(); };
     }, [loadEntry, refreshTrigger]);
 
-    // ── SAVE ──────────────────────────────────────────────────────────────────
-    const saveEntry = useCallback(async () => {
-        const text = contentRef.current;
-        
-        // Persist original public URLs in the database, not temporary signed ones
-        const items = mediaItemsRef.current.map(item => ({
-            type: item.type,
-            url: item.originalUrl || item.url,
-            ...(item.duration ? { duration: item.duration } : {})
-        }));
-
-        // Always write to localStorage first
-        const localRecord = {
-            id: entryId,
-            content: text,
-            date: dateStr,
-            media_items: items,
-            updated_at: new Date().toISOString(),
-        };
-        await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr), localRecord);
-        journalStore.notifyUpdate(dateStr, localRecord);
-
-        if (!userId || !isOnline) {
-            setSyncStatus("local");
-            isDirtyRef.current = false;
-            return;
-        }
-
-        // Then sync to Supabase
-        try {
-            if (entryId) {
-                const { error } = await supabase
-                    .from("entries")
-                    .update({ 
-                        content: text, 
-                        media_items: items,
-                        updated_at: new Date().toISOString() 
-                    })
-                    .eq("id", entryId);
-                if (error) throw error;
-            } else {
-                const { data, error } = await supabase
-                    .from("entries")
-                    .upsert(
-                        { 
-                            user_id: userId, 
-                            date: dateStr, 
-                            content: text, 
-                            media_items: items,
-                            updated_at: new Date().toISOString() 
-                        },
-                        { onConflict: "user_id,date" }
-                    )
-                    .select("id")
-                    .single();
-                if (error) throw error;
-                if (data?.id) {
-                    setEntryId(data.id);
-                    await Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(effectiveId, dateStr), {
-                        ...localRecord,
-                        id: data.id,
-                    });
-                }
-            }
-            setSyncStatus("synced");
-        } catch {
-            setSyncStatus("error");
-        }
-
-        isDirtyRef.current = false;
-    }, [effectiveId, userId, dateStr, entryId, isOnline]);
-
     // ── AUTOSAVE ──────────────────────────────────────────────────────────────
     const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        setContent(e.target.value);
+        const val = e.target.value;
+        setContent(val);
         isDirtyRef.current = true;
         setSyncStatus("saving");
 
+        // Only write to localStorage for authenticated users
+        if (userId) {
+            const items = mediaItemsRef.current.map(item => ({
+                type: item.type,
+                url: item.originalUrl || item.url,
+                ...(item.duration ? { duration: item.duration } : {})
+            }));
+            const localRecord = {
+                id: entryId,
+                content: val,
+                date: dateStr,
+                media_items: items,
+                updated_at: new Date().toISOString(),
+            };
+            Storage.setJSONSync(STORAGE_KEYS.ENTRY_CACHE(userId, dateStr), localRecord);
+            journalStore.notifyUpdate(dateStr, localRecord);
+        }
+
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = setTimeout(saveEntry, 1500);
+        // Use ref so the timer always calls the latest saveEntry, not a stale closure
+        saveTimerRef.current = setTimeout(() => saveEntryRef.current?.(), 1000);
     };
 
-    // Save on unmount if dirty
+    // Save on tab switch / window blur / mobile app backgrounding / unmount
     useEffect(() => {
-        return () => {
-            if (isDirtyRef.current) saveEntry();
-            if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        const handleBackgroundSave = () => {
+            if (isDirtyRef.current) saveEntryRef.current?.();
         };
-    }, [saveEntry]);
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden' || document.hidden) handleBackgroundSave();
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        window.addEventListener('pagehide', handleBackgroundSave);
+        window.addEventListener('blur', handleBackgroundSave);
+
+        return () => {
+            if (isDirtyRef.current) saveEntryRef.current?.();
+            if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            window.removeEventListener('pagehide', handleBackgroundSave);
+            window.removeEventListener('blur', handleBackgroundSave);
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // Empty deps: we use saveEntryRef so we never need to re-register listeners
 
     // Auto-resize textarea
     useEffect(() => {
@@ -290,6 +340,11 @@ export function JournalEditor({
 
     // ── MEDIA OPERATIONS ──────────────────────────────────────────────────────
     const processImageFile = async (file: File) => {
+        // Guest: prompt to sign in instead of creating temporary blob URLs
+        if (isGuestMode) {
+            alert("Sign in to attach photos to your journal entries.");
+            return;
+        }
         if (mediaItems.some(item => item.type === "image")) {
             alert("Only one photo is allowed. Please remove the existing photo first.");
             return;
@@ -297,20 +352,18 @@ export function JournalEditor({
 
         setIsLoadingMedia(true);
         try {
-            // Compress image client-side to target <1.5MB
             const compressed = await compressImageFile(file);
 
             let uploadUrl = "";
             let displayUrl = "";
-            if (userId && userId !== "guest" && isOnline) {
-                uploadUrl = await uploadToSupabase(compressed, userId, dateStr, "image");
+            if (isOnline) {
+                uploadUrl = await uploadToSupabase(compressed, userId!, dateStr, "image");
                 displayUrl = await resolveMediaUrl(uploadUrl);
             } else {
+                // Offline: store blob temporarily, will upload on next save when online
                 uploadUrl = URL.createObjectURL(compressed);
                 displayUrl = uploadUrl;
-                if (!userId) {
-                    alert("Guest Mode: Sign in to permanently save and sync your attached photo.");
-                }
+                blobUrlsRef.current.add(uploadUrl);
             }
 
             const nextItems = [...mediaItems, { type: "image" as const, url: displayUrl, originalUrl: uploadUrl }];
@@ -345,9 +398,13 @@ export function JournalEditor({
             if (items[i].type.indexOf('image') !== -1) {
                 const file = items[i].getAsFile();
                 if (file) {
-                    e.preventDefault();
-                    await processImageFile(file);
-                    break; // Only process the first image pasted
+                    // Only intercept the paste (preventDefault) if we will handle the image.
+                    // If there's already an image, let the text portion still paste normally.
+                    if (!mediaItems.some(item => item.type === "image") && !isGuestMode) {
+                        e.preventDefault();
+                        await processImageFile(file);
+                    }
+                    break;
                 }
             }
         }
@@ -369,6 +426,10 @@ export function JournalEditor({
     });
 
     const startRecording = async () => {
+        if (isGuestMode) {
+            alert("Sign in to record voice memos.");
+            return;
+        }
         if (mediaItems.some(item => item.type === "audio")) {
             alert("Only one voiceover is allowed. Please remove the existing voiceover first.");
             return;
@@ -378,39 +439,41 @@ export function JournalEditor({
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             audioChunksRef.current = [];
 
-            // Configure compressed Opus capturing
-            let options = {};
+            // Safari iOS does not support webm — fall back to mp4
+            let mimeType = "";
+            let options: MediaRecorderOptions = {};
             if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+                mimeType = "audio/webm";
                 options = { mimeType: "audio/webm;codecs=opus", audioBitsPerSecond: 64000 };
+            } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
+                mimeType = "audio/mp4";
+                options = { mimeType: "audio/mp4" };
             }
 
             const recorder = new MediaRecorder(stream, options);
             mediaRecorderRef.current = recorder;
 
             recorder.ondataavailable = (e) => {
-                if (e.data && e.data.size > 0) {
-                    audioChunksRef.current.push(e.data);
-                }
+                if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
             };
 
             recorder.onstop = async () => {
                 const durationSeconds = Math.max(1, recordingTimeRef.current);
-                const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-                stream.getTracks().forEach(track => track.stop()); // release micro
+                const audioBlob = new Blob(audioChunksRef.current, { type: mimeType || "audio/webm" });
+                stream.getTracks().forEach(track => track.stop());
 
                 setIsLoadingMedia(true);
                 try {
                     let uploadUrl = "";
                     let displayUrl = "";
-                    if (userId && userId !== "guest" && isOnline) {
+                    if (userId && isOnline) {
                         uploadUrl = await uploadToSupabase(audioBlob, userId, dateStr, "audio");
                         displayUrl = await resolveMediaUrl(uploadUrl);
                     } else {
+                        // Offline: blob URL, will upload on reconnect
                         uploadUrl = URL.createObjectURL(audioBlob);
                         displayUrl = uploadUrl;
-                        if (!userId) {
-                            alert("Guest Mode: Sign in to permanently save and sync your voiceover.");
-                        }
+                        blobUrlsRef.current.add(uploadUrl);
                     }
 
                     setMediaItems(prev => {
@@ -498,6 +561,7 @@ export function JournalEditor({
 
         if (item.url.startsWith("blob:")) {
             URL.revokeObjectURL(item.url);
+            blobUrlsRef.current.delete(item.url);
         }
 
         setMediaItems(prev => {
@@ -555,7 +619,7 @@ ${content}
             }
         } catch (e) {
             console.error("[ai-refine] failed:", e);
-            alert("Failed to refine entry with AI. Please check your connection and try again.");
+            alert("AI refinement unavailable. Please check your connection and try again.");
         } finally {
             setIsRefining(false);
         }
@@ -569,7 +633,7 @@ ${content}
         isDirtyRef.current = true;
         setSyncStatus("saving");
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = setTimeout(saveEntry, 1000);
+        saveTimerRef.current = setTimeout(() => saveEntryRef.current?.(), 1000);
     };
 
     // ── RENDER ────────────────────────────────────────────────────────────────

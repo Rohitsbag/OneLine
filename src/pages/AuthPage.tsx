@@ -35,6 +35,9 @@ export function AuthPage() {
                 });
                 if (error) throw error;
                 showToast("Check your email for the confirmation link!", "success");
+                setEmail('');
+                setPassword('');
+                setMode('signin');
             } else {
                 const { error } = await supabase.auth.signInWithPassword({
                     email,

@@ -4,6 +4,7 @@ import { Storage, STORAGE_KEYS } from '@/utils/storage';
 
 export interface UserSettings {
     accent_color: string;
+    updated_at?: string;
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -19,7 +20,6 @@ export function useSettings(userId: string | null, isOnline: boolean) {
         return DEFAULT_SETTINGS;
     });
 
-    // Load from localStorage, refresh from Supabase in background
     const loadSettings = useCallback(async (uid: string) => {
         const cached = Storage.getJSONSync<UserSettings>(STORAGE_KEYS.SETTINGS_CACHE(uid));
         if (cached) setSettings({ ...DEFAULT_SETTINGS, ...cached });
@@ -28,16 +28,29 @@ export function useSettings(userId: string | null, isOnline: boolean) {
         try {
             const { data } = await supabase
                 .from('user_settings')
-                .select('accent_color')
+                .select('accent_color, updated_at')
                 .eq('user_id', uid)
                 .single();
+
             if (data) {
-                const fresh = { ...DEFAULT_SETTINGS, ...data };
-                await Storage.setJSON(STORAGE_KEYS.SETTINGS_CACHE(uid), fresh);
-                setSettings(fresh);
+                const localUpdatedAt = cached?.updated_at || '1970-01-01T00:00:00.000Z';
+                const serverUpdatedAt = data.updated_at || '1970-01-01T00:00:00.000Z';
+
+                if (serverUpdatedAt > localUpdatedAt) {
+                    // Server is newer — apply server settings
+                    const fresh = { ...DEFAULT_SETTINGS, ...data };
+                    await Storage.setJSON(STORAGE_KEYS.SETTINGS_CACHE(uid), fresh);
+                    setSettings(fresh);
+                } else if (cached && localUpdatedAt > serverUpdatedAt) {
+                    // Local is newer (changed offline) — push local up to server
+                    supabase.from('user_settings')
+                        .upsert({ user_id: uid, ...cached, updated_at: cached.updated_at })
+                        .then(({ error }) => { if (error) console.error('[Settings] Offline sync push failed:', error); });
+                }
+                // If equal, no action needed
             }
         } catch {
-            // Silently fail — localStorage is fine
+            // Silently fail — localStorage is still good
         }
     }, [isOnline]);
 
@@ -47,16 +60,18 @@ export function useSettings(userId: string | null, isOnline: boolean) {
     }, [userId, loadSettings]);
 
     const updateSetting = useCallback(<K extends keyof UserSettings>(key: K, value: UserSettings[K]) => {
-        setSettings(prev => ({ ...prev, [key]: value }));
+        const now = new Date().toISOString();
+        setSettings(prev => ({ ...prev, [key]: value, updated_at: now }));
 
         if (userId) {
             const cacheKey = STORAGE_KEYS.SETTINGS_CACHE(userId);
             const current = Storage.getJSONSync<UserSettings>(cacheKey) || DEFAULT_SETTINGS;
-            Storage.setJSON(cacheKey, { ...current, [key]: value });
+            const updated = { ...current, [key]: value, updated_at: now };
+            Storage.setJSON(cacheKey, updated);
 
             if (isOnline) {
                 supabase.from('user_settings')
-                    .upsert({ user_id: userId, [key]: value, updated_at: new Date().toISOString() })
+                    .upsert({ user_id: userId, [key]: value, updated_at: now })
                     .then(({ error }) => { if (error) console.error('[Settings] Sync failed:', error); });
             }
         }

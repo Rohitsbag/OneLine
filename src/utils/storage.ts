@@ -3,17 +3,19 @@ export const STORAGE_KEYS = {
     THEME: 'theme',
     SETTINGS_CACHE: (uid: string) => `settings_cache_${uid}`,
     ENTRY_CACHE: (uid: string, date: string) => `entry_cache_${uid}_${date}`,
-    PENDING_SYNC: (uid: string) => `pending_sync_${uid}`,
-    LAST_SYNC: (uid: string) => `last_sync_${uid}`,
-    PENDING_MEDIA: (uid: string) => `pending_media_${uid}`,
 };
+
+/** Fired when localStorage is full so UI can show a warning. */
+export let onStorageQuotaExceeded: (() => void) | null = null;
+export function setStorageQuotaHandler(fn: () => void) {
+    onStorageQuotaExceeded = fn;
+}
 
 export const Storage = {
     async get(key: string): Promise<string | null> {
         try {
             return localStorage.getItem(key);
-        } catch (e) {
-            console.warn('Storage.get failed:', e);
+        } catch {
             return null;
         }
     },
@@ -21,8 +23,13 @@ export const Storage = {
     async set(key: string, value: string): Promise<void> {
         try {
             localStorage.setItem(key, value);
-        } catch (e) {
-            console.warn('Storage.set failed:', e);
+        } catch (e: any) {
+            if (e?.name === 'QuotaExceededError' || e?.code === 22) {
+                console.error('Storage.set: localStorage quota exceeded');
+                onStorageQuotaExceeded?.();
+            } else {
+                console.warn('Storage.set failed:', e);
+            }
         }
     },
 
@@ -34,7 +41,6 @@ export const Storage = {
         }
     },
 
-    // Synchronous get for initial render
     getSync(key: string): string | null {
         try {
             return localStorage.getItem(key);
@@ -43,18 +49,42 @@ export const Storage = {
         }
     },
 
+    setSync(key: string, value: string): void {
+        try {
+            localStorage.setItem(key, value);
+        } catch (e: any) {
+            if (e?.name === 'QuotaExceededError' || e?.code === 22) {
+                console.error('Storage.setSync: localStorage quota exceeded');
+                onStorageQuotaExceeded?.();
+            } else {
+                console.warn('Storage.setSync failed:', e);
+            }
+        }
+    },
+
+    removeSync(key: string): void {
+        try {
+            localStorage.removeItem(key);
+        } catch (e) {
+            console.warn('Storage.removeSync failed:', e);
+        }
+    },
+
     async getJSON<T>(key: string): Promise<T | null> {
         try {
             const value = await this.get(key);
             return value ? JSON.parse(value) : null;
-        } catch (e) {
-            console.error(`Failed to parse ${key}:`, e);
+        } catch {
             return null;
         }
     },
 
     async setJSON(key: string, value: unknown): Promise<void> {
         await this.set(key, JSON.stringify(value));
+    },
+
+    setJSONSync(key: string, value: unknown): void {
+        this.setSync(key, JSON.stringify(value));
     },
 
     getJSONSync<T>(key: string): T | null {
@@ -66,40 +96,12 @@ export const Storage = {
         }
     },
 
-    // Resilient entry cache lookup that searches fallback UID prefixes & wildcard keys
+    /**
+     * Direct entry lookup by userId + date.
+     * No guest fallbacks — userId is always a real authenticated user ID.
+     */
     getEntryCacheSync<T = any>(uid: string | null | undefined, dateStr: string): T | null {
-        try {
-            // 1. Primary lookup using specified UID
-            if (uid) {
-                const primary = this.getJSONSync<T>(STORAGE_KEYS.ENTRY_CACHE(uid, dateStr));
-                if (primary) return primary;
-            }
-
-            // 2. Fallback lookups for guest and null keys
-            const guest = this.getJSONSync<T>(STORAGE_KEYS.ENTRY_CACHE('guest', dateStr));
-            if (guest) return guest;
-            const nullKey = this.getJSONSync<T>(STORAGE_KEYS.ENTRY_CACHE('null', dateStr));
-            if (nullKey) return nullKey;
-
-            // 3. Dynamic wildcard search across all localStorage keys for matching date suffix
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                if (key && key.startsWith('entry_cache_') && key.endsWith(`_${dateStr}`)) {
-                    const raw = localStorage.getItem(key);
-                    if (raw) {
-                        try {
-                            const parsed = JSON.parse(raw);
-                            if (parsed && (parsed.content || parsed.media_items)) {
-                                return parsed as T;
-                            }
-                        } catch { /* ignore parse error */ }
-                    }
-                }
-            }
-        } catch (e) {
-            console.warn('Storage.getEntryCacheSync error:', e);
-        }
-        return null;
-    }
+        if (!uid) return null;
+        return this.getJSONSync<T>(STORAGE_KEYS.ENTRY_CACHE(uid, dateStr));
+    },
 };
-

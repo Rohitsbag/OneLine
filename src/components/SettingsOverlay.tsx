@@ -41,10 +41,14 @@ export function SettingsOverlay({
         navigate("/auth");
     };
 
+    const [isExporting, setIsExporting] = useState(false);
+
     const handleExport = async () => {
+        if (isExporting) return;
+        setIsExporting(true);
         try {
             const { data: { user } } = await supabase.auth.getUser();
-            if (!user) { alert("Sign in to export your data."); return; }
+            if (!user) { alert("Sign in to export your data."); setIsExporting(false); return; }
 
             const { data } = await supabase
                 .from("entries")
@@ -52,7 +56,7 @@ export function SettingsOverlay({
                 .eq("user_id", user.id)
                 .order("date", { ascending: false });
 
-            if (!data?.length) { alert("No entries to export."); return; }
+            if (!data?.length) { alert("No entries to export."); setIsExporting(false); return; }
 
             const text = data.map(e => `${e.date}\n${e.content || "(no entry)"}`).join("\n\n---\n\n");
             const blob = new Blob([text], { type: "text/plain" });
@@ -66,6 +70,8 @@ export function SettingsOverlay({
             URL.revokeObjectURL(url);
         } catch {
             alert("Export failed. Please try again.");
+        } finally {
+            setIsExporting(false);
         }
     };
 
