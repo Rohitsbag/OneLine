@@ -754,6 +754,16 @@ ${content}
                                             src={item.url} 
                                             alt="Attached moment" 
                                             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                            onError={async (e) => {
+                                                const target = e.currentTarget;
+                                                if (!target.dataset.retried) {
+                                                    target.dataset.retried = "true";
+                                                    const freshUrl = await resolveMediaUrl(item.url);
+                                                    if (freshUrl && freshUrl !== item.url) {
+                                                        target.src = freshUrl;
+                                                    }
+                                                }
+                                            }}
                                         />
                                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/25 transition-colors flex items-center justify-center pointer-events-none">
                                             <Expand className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md" />

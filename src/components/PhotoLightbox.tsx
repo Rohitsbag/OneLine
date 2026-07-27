@@ -18,13 +18,22 @@ export function PhotoLightbox({ src, onClose }: PhotoLightboxProps) {
 
     if (!src) return null;
 
-    const handleDownload = () => {
-        const a = document.createElement("a");
-        a.href = src;
-        a.download = `oneline_photo_${Date.now()}.png`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+    const handleDownload = async () => {
+        if (!src) return;
+        try {
+            const response = await fetch(src);
+            const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = blobUrl;
+            a.download = `oneline_photo_${Date.now()}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+        } catch {
+            window.open(src, "_blank");
+        }
     };
 
     return (

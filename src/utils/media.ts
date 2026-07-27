@@ -83,41 +83,70 @@ export async function uploadToSupabase(
 }
 
 /**
- * Translates persistent private Supabase Storage URLs into temporary, authenticated signed URLs.
- * Bypasses private bucket HTTP download blocks.
+ * Translates persistent private/public Supabase Storage URLs or path identifiers
+ * into temporary, authenticated 7-day signed URLs.
+ * Handles both new date-structured paths and legacy unorganized paths,
+ * as well as legacy bucket names (e.g., 'journal-media' vs 'journal-media-private').
  */
 export async function resolveMediaUrl(url: string): Promise<string> {
-    if (!url) return "";
+    if (!url || typeof url !== 'string') return "";
     
-    // Pass local object blobs or already signed links directly
-    if (url.startsWith('blob:') || url.includes('token=')) {
+    // Pass local object blobs directly
+    if (url.startsWith('blob:')) {
         return url;
     }
 
-    // Check if URL belongs to your private Supabase storage bucket
-    if (url.includes('/storage/v1/object/public/journal-media-private/')) {
-        try {
-            const filePath = url.split('/storage/v1/object/public/journal-media-private/')[1];
-            
-            // Create a signed URL valid for 7 days with a 4 second timeout fallback
-            const signPromise = supabase.storage
-                .from('journal-media-private')
-                .createSignedUrl(filePath, 86400 * 7);
+    try {
+        let bucketName = "journal-media-private";
+        let filePath = "";
 
-            const timeoutPromise = new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('timeout')), 4000)
-            );
-
-            const { data, error } = await Promise.race([signPromise, timeoutPromise]) as any;
-                
-            if (!error && data?.signedUrl) {
-                return data.signedUrl;
+        // Case 1: Full HTTP(S) URL containing Supabase storage path:
+        // matches .../storage/v1/object/(public|authenticated|sign)/<bucket-name>/<file-path>
+        const storageMatch = url.match(/\/storage\/v1\/object\/(?:public|authenticated|sign)\/([^\/]+)\/(.+)$/i);
+        
+        if (storageMatch) {
+            bucketName = storageMatch[1];
+            // Decode URI components and strip query params (like ?t=... or token=...)
+            filePath = decodeURIComponent(storageMatch[2].split('?')[0]);
+        } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            // Case 2: Relative storage path stored directly in database
+            // e.g. "journal-media-private/uid/2026-01-17/img.jpg" or "uid/1767542825574-1000115.jpg"
+            const parts = url.split('/');
+            if (parts[0] === 'journal-media-private' || parts[0] === 'journal-media') {
+                bucketName = parts[0];
+                filePath = parts.slice(1).join('/');
             } else {
-                console.warn('[media] Supabase createSignedUrl error:', error);
+                filePath = url.split('?')[0];
             }
-        } catch (e) {
-            console.error('[media] Dynamic signed URL resolver crashed or timed out:', e);
+        } else {
+            // Case 3: External HTTP URL (not Supabase storage) — return as-is
+            return url;
         }
+
+        if (!filePath) return url;
+
+        // Try candidate buckets starting with detected bucketName, then fallbacks
+        const candidateBuckets = Array.from(new Set([
+            bucketName,
+            "journal-media-private",
+            "journal-media"
+        ]));
+
+        for (const bName of candidateBuckets) {
+            try {
+                const { data, error } = await supabase.storage
+                    .from(bName)
+                    .createSignedUrl(filePath, 604800); // 7 days (604,800 seconds)
+
+                if (!error && data?.signedUrl) {
+                    return data.signedUrl;
+                }
+            } catch {
+                // Try next candidate bucket
+            }
+        }
+    } catch (e) {
+        console.warn('[media] Dynamic signed URL resolver error:', e);
     }
 
     return url;
