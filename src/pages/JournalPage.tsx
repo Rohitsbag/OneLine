@@ -13,12 +13,15 @@ import { Storage, STORAGE_KEYS } from "@/utils/storage";
 import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 import { useAuth } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings";
+import { useToast } from "@/components/Toast";
+import { setStorageQuotaHandler } from "@/utils/storage";
 import { WifiOff } from "lucide-react";
 
 export function JournalPage() {
     const { connected: isOnline } = useNetworkStatus();
     const { userId, userEmail, isGuest, isLoading: isLoadingAuth, createdAt: userCreatedAt } = useAuth();
     const { settings, updateSetting } = useSettings(userId, isOnline);
+    const { showToast } = useToast();
 
     const [showCalendar, setShowCalendar] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
@@ -28,6 +31,17 @@ export function JournalPage() {
     const [showStudio, setShowStudio] = useState(false);
     const [showAuthModal, setShowAuthModal] = useState(false);
     const [selectedDate, setSelectedDate] = useState(new Date());
+
+    const minDate = userCreatedAt
+        ? new Date(userCreatedAt)
+        : new Date(new Date().setFullYear(new Date().getFullYear() - 10));
+
+    // Wire up storage quota exceeded handler to show toast
+    useEffect(() => {
+        setStorageQuotaHandler(() => {
+            showToast("Device storage is full. Please free up space or sign in to sync.", "error");
+        });
+    }, [showToast]);
 
     const [isDark, setIsDark] = useState(() => {
         const saved = Storage.getSync(STORAGE_KEYS.THEME);
@@ -54,7 +68,13 @@ export function JournalPage() {
 
             if (e.key === 'ArrowLeft') {
                 e.preventDefault();
-                setSelectedDate(prev => subDays(prev, 1));
+                setSelectedDate(prev => {
+                    const prevDate = subDays(prev, 1);
+                    if (minDate && prevDate < new Date(new Date(minDate).setHours(0, 0, 0, 0))) {
+                        return prev; // Respect minDate boundary
+                    }
+                    return prevDate;
+                });
             } else if (e.key === 'ArrowRight') {
                 e.preventDefault();
                 setSelectedDate(prev => {
@@ -71,12 +91,7 @@ export function JournalPage() {
         };
 
         window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [anyModalOpen]);
-
-    const minDate = userCreatedAt
-        ? new Date(userCreatedAt)
-        : new Date(new Date().setFullYear(new Date().getFullYear() - 10));
+    }, [anyModalOpen, minDate]);
 
     useEffect(() => {
         document.documentElement.classList.toggle("dark", isDark);

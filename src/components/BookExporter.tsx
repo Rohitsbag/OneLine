@@ -147,41 +147,36 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
         setProgressText("Gathering entries from memory...");
 
         try {
-            // 1. Gather all local entries
+            // 1. Gather all local entries for authenticated users
             const allLocal: Entry[] = [];
-            const now = new Date();
-
-            for (let i = 0; i < 730; i++) {
-                const d = new Date(now);
-                d.setDate(d.getDate() - i);
-                const dStr = format(d, "yyyy-MM-dd");
-                const cached = Storage.getEntryCacheSync<any>(effectiveId, dStr);
-                if (cached && (cached.content?.trim() || cached.media_items?.length)) {
-                    allLocal.push({
-                        date: dStr,
-                        content: cached.content?.trim() || "",
-                        media_items: cached.media_items || [],
-                    });
+            if (userId) {
+                const now = new Date();
+                for (let i = 0; i < 730; i++) {
+                    const d = new Date(now);
+                    d.setDate(d.getDate() - i);
+                    const dStr = format(d, "yyyy-MM-dd");
+                    const cached = Storage.getEntryCacheSync<any>(userId, dStr);
+                    if (cached && (cached.content?.trim() || cached.media_items?.length)) {
+                        allLocal.push({
+                            date: dStr,
+                            content: cached.content?.trim() || "",
+                            media_items: cached.media_items || [],
+                        });
+                    }
                 }
             }
 
             // 2. Fetch Supabase server entries if online
-            let activeUid = userId;
-            if (!activeUid) {
-                const cachedUser = Storage.getJSONSync<any>("cached_user");
-                if (cachedUser?.id) activeUid = cachedUser.id;
-            }
-
             let mergedEntries = [...allLocal];
 
-            if (!isGuest && activeUid && navigator.onLine) {
+            if (!isGuest && userId && navigator.onLine) {
                 setProgressPercent(25);
                 setProgressText("Syncing with server entries...");
                 try {
                     const { data, error } = await supabase
                         .from("entries")
                         .select("date, content, media_items")
-                        .eq("user_id", activeUid)
+                        .eq("user_id", userId)
                         .order("date", { ascending: true });
 
                     if (!error && data) {

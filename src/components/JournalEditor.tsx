@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Loader2, Sparkles, Image as ImageIcon, Mic, Trash2, Play, Pause, Expand } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Sparkles, Image as ImageIcon, Mic, Trash2, Play, Pause, Expand, Lock } from "lucide-react";
 import { format, addDays, subDays, isSameDay } from "date-fns";
+import { Link } from "react-router-dom";
 import { supabase } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
 import { ACCENT_COLORS } from "@/constants/colors";
@@ -86,6 +87,8 @@ export function JournalEditor({
     const saveEntryRef = useRef<(() => Promise<void>) | null>(null);
     // Track blob URLs for cleanup on unmount
     const blobUrlsRef = useRef<Set<string>>(new Set());
+    // Store raw pending File/Blob objects for offline uploads
+    const pendingFilesRef = useRef<Map<string, { file: File | Blob; type: "image" | "audio" }>>(new Map());
 
     // Recording refs
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -128,11 +131,30 @@ export function JournalEditor({
         if (!userId) return;
 
         const text = contentRef.current;
-        const items = mediaItemsRef.current.map(item => ({
-            type: item.type,
-            url: item.originalUrl || item.url,
-            ...(item.duration ? { duration: item.duration } : {})
-        }));
+        
+        // Resolve any offline pending blob uploads if we are online now
+        const items = await Promise.all(
+            mediaItemsRef.current.map(async (item) => {
+                let targetUrl = item.originalUrl || item.url;
+                if (targetUrl.startsWith("blob:") && isOnline && userId) {
+                    const pending = pendingFilesRef.current.get(targetUrl);
+                    if (pending) {
+                        try {
+                            const uploadedPublicUrl = await uploadToSupabase(pending.file, userId, dateStr, pending.type);
+                            pendingFilesRef.current.delete(targetUrl);
+                            targetUrl = uploadedPublicUrl;
+                        } catch (err) {
+                            console.warn("[saveEntry] Offline blob upload failed, retaining blob:", err);
+                        }
+                    }
+                }
+                return {
+                    type: item.type,
+                    url: targetUrl,
+                    ...(item.duration ? { duration: item.duration } : {})
+                };
+            })
+        );
 
         // Always write synchronously to localStorage first
         const localRecord = {
@@ -364,6 +386,7 @@ export function JournalEditor({
                 uploadUrl = URL.createObjectURL(compressed);
                 displayUrl = uploadUrl;
                 blobUrlsRef.current.add(uploadUrl);
+                pendingFilesRef.current.set(uploadUrl, { file: compressed, type: "image" });
             }
 
             const nextItems = [...mediaItems, { type: "image" as const, url: displayUrl, originalUrl: uploadUrl }];
@@ -474,6 +497,7 @@ export function JournalEditor({
                         uploadUrl = URL.createObjectURL(audioBlob);
                         displayUrl = uploadUrl;
                         blobUrlsRef.current.add(uploadUrl);
+                        pendingFilesRef.current.set(uploadUrl, { file: audioBlob, type: "audio" });
                     }
 
                     setMediaItems(prev => {
@@ -661,10 +685,16 @@ ${content}
                         {isToday ? "Today" : format(date, "MMMM d, yyyy")}
                     </h2>
                     <div className="text-[10px] text-zinc-400 uppercase tracking-wider">
-                        {syncStatus === "synced" && "✓ Synced"}
-                        {syncStatus === "saving" && "○ Saving…"}
-                        {syncStatus === "local" && "○ Saved locally"}
-                        {syncStatus === "error" && "✗ Save failed — check connection"}
+                        {isGuestMode ? (
+                            "🔒 Sign in to save"
+                        ) : (
+                            <>
+                                {syncStatus === "synced" && "✓ Synced"}
+                                {syncStatus === "saving" && "○ Saving…"}
+                                {syncStatus === "local" && "○ Saved locally"}
+                                {syncStatus === "error" && "✗ Save failed — check connection"}
+                            </>
+                        )}
                     </div>
                 </div>
 
@@ -688,6 +718,18 @@ ${content}
                     isDragActive && "border-indigo-500 bg-indigo-50/10 dark:bg-indigo-950/20"
                 )}
             >
+                {/* Guest Mode Banner */}
+                {isGuestMode && (
+                    <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-3 flex items-center justify-between text-xs text-amber-600 dark:text-amber-400">
+                        <div className="flex items-center gap-2">
+                            <Lock className="w-3.5 h-3.5 shrink-0" />
+                            <span>Guest Mode — Sign in to save your journal entries permanently</span>
+                        </div>
+                        <Link to="/auth" className="font-semibold underline hover:text-amber-500">
+                            Sign In
+                        </Link>
+                    </div>
+                )}
                 <input {...getInputProps()} />
                 
                 {isDragActive && (
