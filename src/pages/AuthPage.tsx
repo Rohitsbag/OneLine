@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader2, Sparkles, Eye, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useToast } from '@/components/Toast';
+import { Storage } from '@/utils/storage';
 
 export function AuthPage() {
     const [isLoading, setIsLoading] = useState(false);

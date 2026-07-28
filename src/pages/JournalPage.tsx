@@ -17,7 +17,7 @@ import { WifiOff } from "lucide-react";
 
 export function JournalPage() {
     const { connected: isOnline } = useNetworkStatus();
-    const { userId, isGuest, isLoading: isLoadingAuth, createdAt: userCreatedAt } = useAuth();
+    const { userId, userEmail, isGuest, isLoading: isLoadingAuth, createdAt: userCreatedAt } = useAuth();
     const { settings, updateSetting } = useSettings(userId, isOnline);
 
     const [showCalendar, setShowCalendar] = useState(false);

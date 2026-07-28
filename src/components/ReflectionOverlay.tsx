@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { X, Sparkles, Loader2, BookOpen, Quote, Copy, Check } from "lucide-react";
-import { format } from "date-fns";
+import { format, subDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Storage, STORAGE_KEYS } from "@/utils/storage";
 import { ACCENT_COLORS } from "@/constants/colors";

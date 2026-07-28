@@ -39,7 +39,6 @@ export function TimelineView({
     const [searchQuery, setSearchQuery] = useState("");
 
     const accentObj = ACCENT_COLORS.find(c => c.bgClass === accentColor) || ACCENT_COLORS[0];
-    const effectiveId = userId || "guest";
 
     // Helper to resolve media URLs to signed URLs
     const resolveEntriesMedia = async (rawEntries: Entry[]): Promise<Entry[]> => {

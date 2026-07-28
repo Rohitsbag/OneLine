@@ -1,7 +1,6 @@
 import { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { Storage, STORAGE_KEYS } from '@/utils/storage';
 import { useAuth } from '@/hooks/useAuth';
 
 // Lazy load pages for performance optimization
