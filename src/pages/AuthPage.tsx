@@ -39,11 +39,21 @@ export function AuthPage() {
                 setPassword('');
                 setMode('signin');
             } else {
-                const { error } = await supabase.auth.signInWithPassword({
+                const { data, error } = await supabase.auth.signInWithPassword({
                     email,
                     password,
                 });
                 if (error) throw error;
+
+                if (data?.user) {
+                    const userData = {
+                        id: data.user.id,
+                        email: data.user.email || email,
+                        created_at: data.user.created_at || new Date().toISOString()
+                    };
+                    Storage.setJSONSync('cached_user', userData);
+                }
+
                 navigate('/app');
             }
         } catch (err: any) {

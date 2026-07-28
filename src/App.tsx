@@ -2,6 +2,7 @@ import { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { Storage, STORAGE_KEYS } from '@/utils/storage';
+import { useAuth } from '@/hooks/useAuth';
 
 // Lazy load pages for performance optimization
 export const loadAuthPage = () => import('@/pages/AuthPage');
@@ -22,8 +23,9 @@ const PageLoader = () => (
 
 // Route wrapper to redirect authenticated users to the journal app
 const PublicRoute = ({ children }: { children: React.ReactNode }) => {
-    const cachedUser = Storage.getJSONSync<{ id: string }>(STORAGE_KEYS.CACHED_USER);
-    if (cachedUser && cachedUser.id) {
+    const { userId, isLoading } = useAuth();
+    if (isLoading) return <PageLoader />;
+    if (userId) {
         return <Navigate to="/app" replace />;
     }
     return <>{children}</>;
@@ -31,8 +33,9 @@ const PublicRoute = ({ children }: { children: React.ReactNode }) => {
 
 // Protected route wrapper to redirect guests/unauthenticated users to auth
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-    const cachedUser = Storage.getJSONSync<{ id: string }>(STORAGE_KEYS.CACHED_USER);
-    if (!cachedUser || !cachedUser.id) {
+    const { userId, isLoading } = useAuth();
+    if (isLoading) return <PageLoader />;
+    if (!userId) {
         return <Navigate to="/auth" replace />;
     }
     return <>{children}</>;
