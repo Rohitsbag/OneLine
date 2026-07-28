@@ -112,6 +112,8 @@ export function JournalPage() {
                 isDark={isDark}
                 toggleTheme={() => setIsDark(!isDark)}
                 accentColor={settings.accent_color}
+                isGuest={isGuest}
+                userEmail={userEmail}
             />
 
             <div className={`flex-1 w-full ${!isOnline ? "mt-8" : ""}`}>
