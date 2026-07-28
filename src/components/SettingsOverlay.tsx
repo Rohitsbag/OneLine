@@ -1,4 +1,4 @@
-import { X, LogOut, User as UserIcon, FileDown } from "lucide-react";
+import { X, LogOut, User as UserIcon, FileDown, KeyRound, Loader2, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { supabase } from "@/utils/supabase/client";
@@ -21,8 +21,21 @@ export function SettingsOverlay({
     const [email, setEmail] = useState<string | null>(null);
     const navigate = useNavigate();
 
+    // Change Password state
+    const [showPasswordForm, setShowPasswordForm] = useState(false);
+    const [newPassword, setNewPassword] = useState("");
+    const [confirmPassword, setConfirmPassword] = useState("");
+    const [isChangingPassword, setIsChangingPassword] = useState(false);
+    const [passwordMsg, setPasswordMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
     useEffect(() => {
         if (!isOpen) return;
+        // Reset password form state on open
+        setShowPasswordForm(false);
+        setNewPassword("");
+        setConfirmPassword("");
+        setPasswordMsg(null);
+
         // Read email from localStorage cache (instant, no network)
         try {
             const raw = localStorage.getItem("cached_user");
@@ -75,6 +88,38 @@ export function SettingsOverlay({
         }
     };
 
+    const handleChangePassword = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (newPassword.length < 6) {
+            setPasswordMsg({ text: "Password must be at least 6 characters.", type: "error" });
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            setPasswordMsg({ text: "Passwords do not match.", type: "error" });
+            return;
+        }
+
+        setIsChangingPassword(true);
+        setPasswordMsg(null);
+
+        try {
+            const { error } = await supabase.auth.updateUser({ password: newPassword });
+            if (error) throw error;
+
+            setPasswordMsg({ text: "Password updated successfully!", type: "success" });
+            setNewPassword("");
+            setConfirmPassword("");
+            setTimeout(() => {
+                setShowPasswordForm(false);
+                setPasswordMsg(null);
+            }, 2000);
+        } catch (err: any) {
+            setPasswordMsg({ text: err.message || "Failed to update password.", type: "error" });
+        } finally {
+            setIsChangingPassword(false);
+        }
+    };
+
     if (!isOpen) return null;
 
     const isGuest = !email;
@@ -116,7 +161,7 @@ export function SettingsOverlay({
                         </div>
                     </div>
 
-                    {/* Accent Color */}
+                    {/* Theme Color */}
                     <div>
                         <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest mb-3 px-1">Theme Color</div>
                         <div className="flex gap-2 flex-wrap">
@@ -135,16 +180,85 @@ export function SettingsOverlay({
                         </div>
                     </div>
 
+                    {/* Inline Change Password Form */}
+                    {!isGuest && showPasswordForm && (
+                        <form onSubmit={handleChangePassword} className="p-4 bg-zinc-50 dark:bg-zinc-900/60 rounded-2xl border border-zinc-200 dark:border-zinc-800 space-y-3 animate-in fade-in zoom-in-95 duration-200">
+                            <div className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                                Change Password
+                            </div>
+                            <input
+                                type="password"
+                                placeholder="New Password (min. 6 chars)"
+                                value={newPassword}
+                                onChange={(e) => setNewPassword(e.target.value)}
+                                className="w-full bg-white dark:bg-black/50 border border-zinc-200 dark:border-zinc-800 py-2 px-3 rounded-xl text-xs text-zinc-900 dark:text-white placeholder:text-zinc-500 focus:outline-none focus:border-zinc-400"
+                                required
+                                minLength={6}
+                            />
+                            <input
+                                type="password"
+                                placeholder="Confirm New Password"
+                                value={confirmPassword}
+                                onChange={(e) => setConfirmPassword(e.target.value)}
+                                className="w-full bg-white dark:bg-black/50 border border-zinc-200 dark:border-zinc-800 py-2 px-3 rounded-xl text-xs text-zinc-900 dark:text-white placeholder:text-zinc-500 focus:outline-none focus:border-zinc-400"
+                                required
+                                minLength={6}
+                            />
+
+                            {passwordMsg && (
+                                <div className={cn(
+                                    "text-xs p-2 rounded-lg border flex items-center gap-1.5",
+                                    passwordMsg.type === "success" 
+                                        ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400" 
+                                        : "bg-red-500/10 border-red-500/20 text-red-500"
+                                )}>
+                                    {passwordMsg.type === "success" && <Check className="w-3.5 h-3.5 shrink-0" />}
+                                    <span>{passwordMsg.text}</span>
+                                </div>
+                            )}
+
+                            <div className="flex gap-2 pt-1">
+                                <button
+                                    type="button"
+                                    onClick={() => { setShowPasswordForm(false); setPasswordMsg(null); }}
+                                    className="flex-1 py-2 rounded-xl text-xs font-medium text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isChangingPassword}
+                                    className={cn(
+                                        "flex-1 py-2 rounded-xl text-xs font-semibold text-white transition-all flex items-center justify-center gap-1.5",
+                                        accentColor
+                                    )}
+                                >
+                                    {isChangingPassword && <Loader2 className="w-3 h-3 animate-spin" />}
+                                    Update
+                                </button>
+                            </div>
+                        </form>
+                    )}
+
                     {/* Actions */}
                     <div className="space-y-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
                         {!isGuest && (
-                            <button
-                                onClick={handleExport}
-                                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors text-sm font-semibold text-zinc-700 dark:text-zinc-300"
-                            >
-                                <FileDown className="w-4 h-4 text-zinc-400" />
-                                Export Entries
-                            </button>
+                            <>
+                                <button
+                                    onClick={() => { setShowPasswordForm(!showPasswordForm); setPasswordMsg(null); }}
+                                    className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors text-sm font-semibold text-zinc-700 dark:text-zinc-300"
+                                >
+                                    <KeyRound className="w-4 h-4 text-zinc-400" />
+                                    Change Password
+                                </button>
+                                <button
+                                    onClick={handleExport}
+                                    className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors text-sm font-semibold text-zinc-700 dark:text-zinc-300"
+                                >
+                                    <FileDown className="w-4 h-4 text-zinc-400" />
+                                    Export Entries
+                                </button>
+                            </>
                         )}
                         {!isGuest ? (
                             <button
