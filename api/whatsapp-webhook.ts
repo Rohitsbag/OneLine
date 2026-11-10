@@ -52,29 +52,6 @@ async function sendTextMessage(to: string, text: string) {
     });
 }
 
-async function sendInteractiveButtons(
-    to: string,
-    bodyText: string,
-    buttons: Array<{ id: string; title: string }>
-) {
-    return sendWhatsAppRaw({
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to,
-        type: 'interactive',
-        interactive: {
-            type: 'button',
-            body: { text: bodyText },
-            action: {
-                buttons: buttons.slice(0, 3).map(btn => ({
-                    type: 'reply',
-                    reply: { id: btn.id, title: btn.title.slice(0, 20) },
-                })),
-            },
-        },
-    });
-}
-
 async function sendInteractiveList(
     to: string,
     bodyText: string,
@@ -297,7 +274,7 @@ async function generateMonthlyDiaryPdf(userId: string, targetMonthStr: string): 
         const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
         let page = pdfDoc.addPage([595.28, 841.89]); // A4
-        const { width, height } = page.getSize();
+        const { height } = page.getSize();
         let y = height - 60;
 
         // Cover / Header
