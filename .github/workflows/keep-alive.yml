@@ -28,7 +28,7 @@ jobs:
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
-            "$CLEAN_URL/rest/v1/")
+            "$CLEAN_URL/rest/v1/entries?select=count")
 
           echo "Response HTTP Status: $HTTP_STATUS"
 
