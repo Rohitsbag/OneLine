@@ -108,35 +108,27 @@ async function sendMainMenu(to: string, userName?: string) {
         'Choose an Option',
         [
             {
-                title: '📝 Write & Capture',
+                title: 'Write & Capture',
                 rows: [
                     { id: 'act_add_today', title: "Add to Today's Note", description: 'Send a quick text, photo, or voice memo' },
-                    { id: 'act_replace_today', title: "Replace Today's Note", description: 'Erase today and start fresh' },
                     { id: 'act_write_yesterday', title: 'Write for Yesterday', description: 'Forgot yesterday? Add it here' },
                     { id: 'act_idea_prompt', title: 'Need an Idea to Write?', description: 'Get a fun, friendly question' },
                 ],
             },
             {
-                title: '📖 Read & Remember',
+                title: 'Read & Remember',
                 rows: [
                     { id: 'act_read_today', title: "Read Today's Note", description: "See what you've saved today" },
-                    { id: 'act_read_yesterday', title: "Read Yesterday's Note", description: 'See what you wrote yesterday' },
-                    { id: 'act_past_memory', title: 'Time Machine', description: 'What you wrote on this day in the past' },
+                    { id: 'act_past_memory', title: 'Time Machine', description: 'What you wrote on this day in past' },
                     { id: 'act_week_summary', title: 'My Week in 3 Sentences', description: 'Friendly 7-day AI summary' },
                 ],
             },
             {
-                title: '⭐ Downloads & Streaks',
+                title: 'Diary Tools',
                 rows: [
                     { id: 'act_streak', title: 'My Diary Streak', description: 'See how many days in a row' },
-                    { id: 'act_download_pdf', title: 'Download My Diary (PDF)', description: 'Get a printable PDF diary book' },
-                ],
-            },
-            {
-                title: '⏰ Reminders & Settings',
-                rows: [
+                    { id: 'act_download_pdf', title: 'Download My Diary', description: 'Get a printable PDF diary book' },
                     { id: 'act_change_reminder', title: 'Change Reminder Time', description: 'Pick when we remind you each night' },
-                    { id: 'act_unlink', title: 'Disconnect WhatsApp', description: 'Stop linking WhatsApp to OneLine' },
                 ],
             },
         ]
