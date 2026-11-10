@@ -52,7 +52,7 @@ export async function uploadToSupabase(
 
     console.log(`[media] Uploading ${type} to Supabase path: ${filePath} (Size: ${(file.size / 1024).toFixed(1)} KB)...`);
     
-    const { data, error } = await supabase.storage
+    const { error } = await supabase.storage
         .from('journal-media-private')
         .upload(filePath, file, {
             upsert: true,

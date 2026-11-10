@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { format, parseISO } from "date-fns";
 import { 
-    X, Play, Pause, RotateCcw, ArrowRightLeft, 
-    Mic, MicOff, Music, VolumeX, FastForward, ChevronLeft, ChevronRight 
+    X, Play, Pause, ArrowRightLeft, 
+    Mic, MicOff, Music, VolumeX, ChevronLeft, ChevronRight 
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/utils/supabase/client";
@@ -97,6 +97,15 @@ export function CinematicOverlay({ isOpen, onClose, userId, isGuest = false }: C
             }
         }
     }, [effectiveId, userId, isGuest]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") onClose();
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [isOpen, onClose]);
 
     useEffect(() => {
         if (isOpen) {
@@ -239,7 +248,10 @@ export function CinematicOverlay({ isOpen, onClose, userId, isGuest = false }: C
                         <p className="text-zinc-400 text-sm font-light">Start journaling to watch your cinematic story unfold!</p>
                     </div>
                 ) : (
-                    <div className="w-full flex flex-col items-center justify-center gap-6 animate-in fade-in zoom-in-95 duration-500 key={currentEntry.date}">
+                    <div 
+                        key={currentEntry.date}
+                        className="w-full flex flex-col items-center justify-center gap-6 animate-in fade-in zoom-in-95 duration-500"
+                    >
                         {/* Date Header */}
                         <div className="text-center">
                             <span className="text-sm font-mono text-zinc-400 tracking-widest uppercase">

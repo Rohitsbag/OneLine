@@ -81,7 +81,7 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
             try {
                 const { data, error } = await supabase
                     .from('entries')
-                    .select('date, content, media_items')
+                    .select('id, date, content, media_items, updated_at')
                     .eq('user_id', activeUid)
                     .gte('date', format(monthStart, 'yyyy-MM-dd'))
                     .lte('date', format(monthEnd, 'yyyy-MM-dd'));
@@ -91,8 +91,12 @@ export function CalendarOverlay({ isOpen, onClose, onSelectDate, selectedDate, m
                     for (const e of data) {
                         if (e.content?.trim() || (e.media_items && e.media_items.length > 0)) {
                             serverDates.push(e.date);
-                            // Cache to localStorage so JournalEditor & offline modes have entry immediately
-                            Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(activeUid, e.date), e);
+                            const existing = Storage.getEntryCacheSync<any>(activeUid, e.date);
+                            const localTime = existing?.updated_at ? new Date(existing.updated_at).getTime() : 0;
+                            const serverTime = e.updated_at ? new Date(e.updated_at).getTime() : 0;
+                            if (!existing || serverTime >= localTime) {
+                                Storage.setJSON(STORAGE_KEYS.ENTRY_CACHE(activeUid, e.date), e);
+                            }
                         }
                     }
                     setEntryDates(prev => new Set([...prev, ...serverDates]));

@@ -1,0 +1,40 @@
+name: Supabase Keep-Alive
+
+on:
+  schedule:
+    # Runs every 3 days at 05:00 UTC to prevent the 7-day inactivity pause
+    - cron: '0 5 */3 * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  ping-supabase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::error::SUPABASE_URL or SUPABASE_ANON_KEY secret is not set in GitHub repository secrets."
+            echo "Please add SUPABASE_URL and SUPABASE_ANON_KEY under: Repository Settings -> Secrets and variables -> Actions"
+            exit 1
+          fi
+
+          # Strip trailing slash from URL if present
+          CLEAN_URL="${SUPABASE_URL%/}"
+
+          echo "Pinging Supabase database to reset inactivity timer..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            "$CLEAN_URL/rest/v1/")
+
+          echo "Response HTTP Status: $HTTP_STATUS"
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ]; then
+            echo "✓ Success: Supabase received active query traffic. Inactivity timer reset."
+          else
+            echo "::warning::Received HTTP $HTTP_STATUS from Supabase. Please verify project status in Supabase dashboard."
+            exit 1
+          fi

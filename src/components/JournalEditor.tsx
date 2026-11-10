@@ -272,10 +272,16 @@ export function JournalEditor({
                 const { data, error } = await Promise.race([fetchPromise, timeoutPromise]) as any;
 
                 if (!error && !isDirtyRef.current) {
-                    const serverHasData = Boolean(data && (data.content?.trim() || data.media_items?.length));
+                    const localUpdatedAt = cached?.updated_at ? new Date(cached.updated_at).getTime() : 0;
+                    const serverUpdatedAt = data?.updated_at ? new Date(data.updated_at).getTime() : 0;
                     const localHasData = Boolean(cachedContent.trim() || cachedMedia.length);
+                    const serverHasData = Boolean(data && (data.content?.trim() || data.media_items?.length));
 
-                    if (data && (serverHasData || !localHasData)) {
+                    // If local offline edits are newer than the server version, preserve local and sync up
+                    if (localHasData && localUpdatedAt > serverUpdatedAt) {
+                        console.log("[Editor] Preserving newer local offline edits and syncing to server:", dateStr);
+                        setTimeout(() => saveEntryRef.current?.(), 100);
+                    } else if (data && (serverHasData || !localHasData)) {
                         setContent(data.content || "");
                         setEntryId(data.id);
                         const resolvedServer = await resolveItemsUrls(data.media_items || []);
@@ -790,7 +796,7 @@ ${content}
                                     <div 
                                         key={idx} 
                                         onClick={() => setLightboxSrc(item.url)}
-                                        className="relative group rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-955 shadow-sm aspect-video max-h-48 flex items-center justify-center transition-all hover:shadow-md cursor-pointer"
+                                        className="relative group rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 shadow-sm aspect-video max-h-48 flex items-center justify-center transition-all hover:shadow-md cursor-pointer"
                                     >
                                         <img 
                                             src={item.url} 

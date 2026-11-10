@@ -26,12 +26,9 @@ import {
     Search,
     BookOpen,
     Check,
-    HelpCircle,
     ChevronDown,
     Play,
     Pause,
-    Quote,
-    Layers,
     Ghost
 } from 'lucide-react';
 import { cn } from "@/lib/utils";
@@ -721,7 +718,7 @@ const BentoFeatures = () => {
                                             isPlayingAudio ? "bg-emerald-500 animate-pulse" : "bg-zinc-300 dark:bg-zinc-800"
                                         )}
                                         style={{
-                                            height: isPlayingAudio ? `${(h + Math.random() * 2) * 16}%` : `${h * 15}%`,
+                                            height: isPlayingAudio ? `${(h + (i % 2 === 0 ? 1.5 : 0.5)) * 16}%` : `${h * 15}%`,
                                             animationDelay: `${i * 60}ms`
                                         }}
                                     />
@@ -1049,8 +1046,8 @@ const Footer = () => (
                     © {new Date().getFullYear()} OneLine Inc. All rights reserved.
                 </p>
                 <div className="flex gap-6 text-xs text-zinc-400 dark:text-zinc-500 font-light">
-                    <span className="cursor-pointer hover:text-zinc-900 dark:hover:text-white transition-colors">Privacy Policy</span>
-                    <span className="cursor-pointer hover:text-zinc-900 dark:hover:text-white transition-colors">Terms of Service</span>
+                    <Link to="/privacy" className="hover:text-zinc-900 dark:hover:text-white transition-colors">Privacy Policy</Link>
+                    <Link to="/terms" className="hover:text-zinc-900 dark:hover:text-white transition-colors">Terms of Service</Link>
                 </div>
             </div>
         </div>

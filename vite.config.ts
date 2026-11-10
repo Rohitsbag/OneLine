@@ -22,7 +22,6 @@ export default defineConfig({
         rollupOptions: {
             output: {
                 manualChunks: {
-                    'three-bundle': ['three'],
                     'vendor': ['react', 'react-dom', 'react-router-dom'],
                 }
             }

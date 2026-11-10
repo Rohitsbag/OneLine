@@ -78,6 +78,46 @@ body {
         scrollbar-width: none;
     }
 
+    @keyframes enter {
+        from {
+            opacity: var(--tw-enter-opacity, 1);
+            transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0) scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), var(--tw-enter-scale, 1));
+        }
+    }
+
+    .animate-in {
+        animation-name: enter;
+        animation-duration: 150ms;
+        --tw-enter-opacity: initial;
+        --tw-enter-scale: initial;
+        --tw-enter-translate-x: initial;
+        --tw-enter-translate-y: initial;
+    }
+
+    .fade-in {
+        --tw-enter-opacity: 0;
+    }
+
+    .zoom-in-95 {
+        --tw-enter-scale: 0.95;
+    }
+
+    .slide-in-from-bottom-2 {
+        --tw-enter-translate-y: 0.5rem;
+    }
+
+    .slide-in-from-bottom-4 {
+        --tw-enter-translate-y: 1rem;
+    }
+
+    .slide-in-from-bottom-full {
+        --tw-enter-translate-y: 100%;
+    }
+
+    .slide-in-from-top-4 {
+        --tw-enter-translate-y: -1rem;
+    }
+
     /* --- LIGHT MODE HERO TEXT (DEFAULT) --- */
     .hero-line-1 {
         color: #ffffff;

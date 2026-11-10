@@ -45,6 +45,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     try {
         const body = req.body;
+        if (!body || typeof body !== "object") {
+            return res.status(400).json({ error: "Invalid request payload" });
+        }
 
         if (body.action !== "gemini") {
             return res.status(400).json({ error: "Invalid action" });

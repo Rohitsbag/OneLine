@@ -91,20 +91,24 @@ export function TimelineView({
             try {
                 const { data, error } = await supabase
                     .from("entries")
-                    .select("date, content, media_items")
+                    .select("id, date, content, media_items, updated_at")
                     .eq("user_id", userId)
-                    .not("content", "is", null)
-                    .neq("content", "")
                     .order("date", { ascending: false })
                     .limit(200);
 
                 if (!error && data) {
                     for (const e of data) {
-                        Storage.setJSONSync(STORAGE_KEYS.ENTRY_CACHE(userId, e.date), e);
+                        const existing = Storage.getEntryCacheSync<any>(userId, e.date);
+                        const localTime = existing?.updated_at ? new Date(existing.updated_at).getTime() : 0;
+                        const serverTime = e.updated_at ? new Date(e.updated_at).getTime() : 0;
+                        if (!existing || serverTime >= localTime) {
+                            Storage.setJSONSync(STORAGE_KEYS.ENTRY_CACHE(userId, e.date), e);
+                        }
                     }
                     const serverDates = new Set(data.map(e => e.date));
+                    const validData = data.filter(e => e.content?.trim() || e.media_items?.length);
                     const merged = [
-                        ...data,
+                        ...validData,
                         ...localEntries.filter(e => !serverDates.has(e.date)),
                     ].sort((a, b) => b.date.localeCompare(a.date));
                     
@@ -189,11 +193,20 @@ export function TimelineView({
                                 const entryDate = parseISO(entry.date);
                                 const isSelected = format(currentDate, "yyyy-MM-dd") === entry.date;
                                 return (
-                                    <button
+                                    <div
                                         key={entry.date}
+                                        role="button"
+                                        tabIndex={0}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter" || e.key === " ") {
+                                                e.preventDefault();
+                                                onDateSelect(entryDate);
+                                                onClose();
+                                            }
+                                        }}
                                         onClick={() => { onDateSelect(entryDate); onClose(); }}
                                         className={cn(
-                                            "w-full text-left px-4 py-3 rounded-2xl transition-all group",
+                                            "w-full text-left px-4 py-3 rounded-2xl transition-all group cursor-pointer",
                                             isSelected
                                                 ? cn(accentObj.bgClass, "text-white")
                                                 : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
@@ -236,7 +249,7 @@ export function TimelineView({
                                                 ))}
                                             </div>
                                         )}
-                                    </button>
+                                    </div>
                                 );
                             })}
                         </div>

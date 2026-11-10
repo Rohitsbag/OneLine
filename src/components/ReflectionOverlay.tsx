@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { X, Sparkles, Loader2, BookOpen, Quote, Copy, Check } from "lucide-react";
+import { X, Sparkles, BookOpen, Quote, Copy, Check } from "lucide-react";
 import { format, subDays } from "date-fns";
 import { cn } from "@/lib/utils";
-import { Storage, STORAGE_KEYS } from "@/utils/storage";
+import { Storage } from "@/utils/storage";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { supabase } from "@/utils/supabase/client";
 import { callGemini } from "@/utils/ai";
@@ -108,9 +108,10 @@ export function ReflectionOverlay({
             gatheredEntries.sort((a, b) => b.date.localeCompare(a.date));
 
             // Formulate prompt
-            const entriesText = gatheredEntries
+            const rawText = gatheredEntries
                 .map(e => `[Date: ${e.date}]\n${e.content}`)
                 .join("\n\n");
+            const entriesText = rawText.length > 28000 ? rawText.slice(0, 28000) + "\n...[truncated]" : rawText;
 
             const prompt = `You are a warm, mindful, and insightful personal growth coach. Analyze the following journal entries from the user's recent days and generate a reflection in valid JSON format.
 

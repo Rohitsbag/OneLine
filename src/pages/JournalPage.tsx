@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { addDays, subDays, format } from "date-fns";
 import { Header } from "@/components/Header";
 import { JournalEditor } from "@/components/JournalEditor";
@@ -32,9 +32,11 @@ export function JournalPage() {
     const [showAuthModal, setShowAuthModal] = useState(false);
     const [selectedDate, setSelectedDate] = useState(new Date());
 
-    const minDate = userCreatedAt
-        ? new Date(userCreatedAt)
-        : new Date(new Date().setFullYear(new Date().getFullYear() - 10));
+    const minDate = useMemo(() => {
+        return userCreatedAt
+            ? new Date(userCreatedAt)
+            : new Date(new Date().setFullYear(new Date().getFullYear() - 10));
+    }, [userCreatedAt]);
 
     // Wire up storage quota exceeded handler to show toast
     useEffect(() => {
@@ -91,6 +93,7 @@ export function JournalPage() {
         };
 
         window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
     }, [anyModalOpen, minDate]);
 
     useEffect(() => {

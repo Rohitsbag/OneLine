@@ -1,4 +1,4 @@
-import { Calendar, Settings, Sun, Moon, Clock, Sparkles, Film } from "lucide-react";
+import { Calendar, Settings, Sun, Moon, Clock, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ACCENT_COLORS } from "@/constants/colors";
 import { useState, useRef, useEffect } from "react";
@@ -7,7 +7,7 @@ interface HeaderProps {
     onOpenCalendar: () => void;
     onOpenSettings: () => void;
     onOpenTimeline: () => void;
-    onOpenReflection: () => void;
+    onOpenReflection?: () => void;
     onOpenCinematic?: () => void;
     onOpenStudio?: () => void;
     isDark: boolean;
@@ -21,8 +21,6 @@ export function Header({
     onOpenCalendar,
     onOpenSettings,
     onOpenTimeline,
-    onOpenReflection,
-    onOpenCinematic,
     onOpenStudio,
     isDark,
     toggleTheme,

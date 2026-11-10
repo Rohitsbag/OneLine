@@ -1,10 +1,19 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { format, parseISO } from "date-fns";
 import { BookOpen, Printer, Check, Image as ImageIcon, Layers, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/utils/supabase/client";
 import { Storage } from "@/utils/storage";
 import { resolveMediaUrl } from "@/utils/media";
+
+function escapeHtml(str: string): string {
+    return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
 
 interface Entry {
     date: string;
@@ -138,8 +147,6 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
     const [progressPercent, setProgressPercent] = useState(0);
     const [progressText, setProgressText] = useState("");
 
-    const effectiveId = userId || "guest";
-
     // Build print HTML document and trigger browser print dialog
     const generateAndPrintBook = async () => {
         setIsGenerating(true);
@@ -264,7 +271,7 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                 <!DOCTYPE html>
                 <html>
                 <head>
-                    <title>${bookTitle}</title>
+                    <title>${escapeHtml(bookTitle)}</title>
                     <meta charset="utf-8" />
                     <style>
                         @page {
@@ -381,19 +388,19 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                     <!-- Cover Page -->
                     <div class="cover-page">
                         <div class="cover-emblem">📖</div>
-                        <div class="cover-title">${bookTitle}</div>
-                        <div class="cover-subtitle">${bookSubtitle}</div>
+                        <div class="cover-title">${escapeHtml(bookTitle)}</div>
+                        <div class="cover-subtitle">${escapeHtml(bookSubtitle)}</div>
                         <div class="cover-meta">${filtered.length} MOMENTS RECORDED</div>
                     </div>
 
                     <!-- Book Chapters -->
                     ${Object.entries(monthGroups).map(([monthName, monthEntries]) => `
                         <div class="month-section">
-                            <div class="month-header">${monthName}</div>
+                            <div class="month-header">${escapeHtml(monthName)}</div>
                             ${monthEntries.map((e) => `
                                 <div class="entry-card">
                                     <div class="entry-date">${format(parseISO(e.date), "EEEE, MMMM d, yyyy")}</div>
-                                    ${e.content ? `<p class="entry-text">"${e.content}"</p>` : ""}
+                                    ${e.content ? `<p class="entry-text">"${escapeHtml(e.content)}"</p>` : ""}
                                     ${e.resolvedImgUrl ? `
                                         <div class="entry-img-container">
                                             <img src="${e.resolvedImgUrl}" class="entry-img" alt="Attached photo" />
@@ -515,6 +522,23 @@ export function BookExporter({ userId, isGuest = false }: BookExporterProps) {
                             Custom Range
                         </button>
                     </div>
+
+                    {rangeMode === "year" && (
+                        <div className="mt-3 p-3.5 bg-zinc-950/40 rounded-2xl border border-zinc-800 flex items-center justify-between">
+                            <span className="text-xs text-zinc-400">Target Year</span>
+                            <select
+                                value={selectedYear}
+                                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                                className="bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none cursor-pointer"
+                            >
+                                {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - i).map((yr) => (
+                                    <option key={yr} value={yr}>
+                                        {yr}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
 
                     {rangeMode === "custom" && (
                         <div className="grid grid-cols-2 gap-4 mt-3 p-4 bg-zinc-950/40 rounded-2xl border border-zinc-800">
