@@ -16,7 +16,7 @@ interface SettingsOverlayProps {
     onUpdateSetting?: <K extends keyof UserSettings>(key: K, value: UserSettings[K]) => void;
 }
 
-const WHATSAPP_BOT_NUMBER = import.meta.env.VITE_WHATSAPP_BOT_NUMBER || "";
+const WHATSAPP_BOT_NUMBER = import.meta.env.VITE_WHATSAPP_BOT_NUMBER || "15551481260";
 
 export function SettingsOverlay({
     isOpen,
