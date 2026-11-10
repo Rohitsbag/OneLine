@@ -5,10 +5,21 @@ import { Storage, STORAGE_KEYS } from '@/utils/storage';
 export interface UserSettings {
     accent_color: string;
     updated_at?: string;
+    whatsapp_phone?: string | null;
+    whatsapp_pair_code?: string | null;
+    whatsapp_pair_expires_at?: string | null;
+    timezone?: string;
+    whatsapp_auto_transcribe?: boolean;
+    reminder_enabled?: boolean;
+    reminder_time?: string;
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
     accent_color: 'bg-indigo-500',
+    timezone: 'Asia/Kolkata',
+    reminder_enabled: true,
+    reminder_time: '21:00',
+    whatsapp_auto_transcribe: true,
 };
 
 export function useSettings(userId: string | null, isOnline: boolean) {
@@ -28,7 +39,7 @@ export function useSettings(userId: string | null, isOnline: boolean) {
         try {
             const { data } = await supabase
                 .from('user_settings')
-                .select('accent_color, updated_at')
+                .select('*')
                 .eq('user_id', uid)
                 .single();
 

@@ -159,6 +159,9 @@ export function JournalPage() {
                 onClose={() => setShowSettings(false)}
                 accentColor={settings.accent_color}
                 onAccentChange={(v) => updateSetting("accent_color", v)}
+                userId={userId}
+                settings={settings}
+                onUpdateSetting={updateSetting}
             />
 
             <TimelineView
