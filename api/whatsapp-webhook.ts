@@ -322,6 +322,145 @@ async function callGemini(prompt: string, inlineMedia?: { mimeType: string; base
 }
 
 // ==========================================
+// 30-Day Non-Repeating Daily Journal Prompts (< 10 words)
+// ==========================================
+
+const CURATED_PROMPTS: string[] = [
+    "What made you smile today?",
+    "Who made your day a little easier?",
+    "What was the most peaceful moment today?",
+    "What is one thing you handled well today?",
+    "What are you most grateful for right now?",
+    "What made you laugh today?",
+    "What was the best taste or meal today?",
+    "Whom did you enjoy talking to today?",
+    "What surprised you the most today?",
+    "What is one small win from today?",
+    "What sound or song felt good today?",
+    "Where did you feel most relaxed today?",
+    "What gave you energy today?",
+    "What drained your energy today?",
+    "What was a kind thing someone did for you?",
+    "What is something kind you did today?",
+    "What did you learn today?",
+    "What made you pause and think today?",
+    "What are you looking forward to tomorrow?",
+    "How did your body feel today?",
+    "What felt effortless today?",
+    "What felt challenging today?",
+    "Whom are you thinking about right now?",
+    "What did you notice today that you usually miss?",
+    "What gave you comfort today?",
+    "What was the highlight of your morning?",
+    "What was the highlight of your evening?",
+    "What was the prettiest thing you saw today?",
+    "What was a funny moment from today?",
+    "What is a thought that kept returning today?",
+    "What was your favorite conversation today?",
+    "What brought you unexpected joy today?",
+    "What is one thing you would do differently today?",
+    "What felt peaceful about this evening?",
+    "What made you feel like yourself today?",
+    "How would you describe today in three words?"
+];
+
+function normalizePrompt(text: string): string {
+    return text.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+async function getUniqueJournalPrompt(userId: string): Promise<string> {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    // 1. Fetch prompts served to this user in the rolling 30-day window
+    const { data: history } = await supabase
+        .from('journal_prompts_history')
+        .select('prompt_text')
+        .eq('user_id', userId)
+        .gte('served_at', thirtyDaysAgo)
+        .order('served_at', { ascending: false });
+
+    const servedList = (history || []).map((h: any) => (h.prompt_text || '').trim()).filter(Boolean);
+    const servedNormalizedSet = new Set(servedList.map(normalizePrompt));
+
+    let candidate = '';
+
+    // 2. Attempt dynamic generation with Gemini 2.5 Flash
+    if (GEMINI_API_KEY) {
+        try {
+            const exclusions = servedList.slice(0, 15).map(p => `- ${p}`).join('\n');
+            const systemPrompt = [
+                "You are a warm, thoughtful daily journaling companion for OneLine.",
+                "Suggest ONE short, conversational daily reflection question.",
+                "STRICT RULES:",
+                "- Target length: 6 to 9 words. MAXIMUM: 10 words. Absolute hard limit: 12 words.",
+                "- Simple, human, reflective.",
+                "- Output ONLY the question. No quotes, no intro, no emojis, no commentary.",
+                exclusions ? `- Never repeat or rephrase any of these recent questions:\n${exclusions}` : ''
+            ].filter(Boolean).join('\n');
+
+            const rawAiPrompt = await callGemini(systemPrompt);
+            const cleaned = rawAiPrompt
+                .replace(/^["'`\s*#]+|["'`\s*#]+$/g, '')
+                .replace(/\n+/g, ' ')
+                .trim();
+
+            const words = cleaned.split(/\s+/).filter(Boolean);
+            const normCleaned = normalizePrompt(cleaned);
+
+            // Validate length (must be <= 12 words, strictly under 15 words limit)
+            // and verify it hasn't been served to this user in the past 30 days
+            if (words.length >= 3 && words.length <= 12 && !servedNormalizedSet.has(normCleaned)) {
+                // Ensure no semantic near-duplicate (>60% keyword overlap) with recent prompts
+                const candidateKeywords = new Set(normCleaned.split(' ').filter(w => w.length > 3));
+                let tooSimilar = false;
+
+                if (candidateKeywords.size > 0) {
+                    for (const prev of servedNormalizedSet) {
+                        const prevKeywords = prev.split(' ').filter(w => w.length > 3);
+                        const matchCount = prevKeywords.filter(w => candidateKeywords.has(w)).length;
+                        if (matchCount / candidateKeywords.size >= 0.6) {
+                            tooSimilar = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!tooSimilar) {
+                    candidate = cleaned.endsWith('?') ? cleaned : `${cleaned}?`;
+                }
+            }
+        } catch (geminiErr) {
+            console.error('[Gemini Prompt Generator Error]:', geminiErr);
+        }
+    }
+
+    // 3. Fallback to curated prompts if Gemini is unavailable, too verbose, or duplicate
+    if (!candidate) {
+        const unservedCurated = CURATED_PROMPTS.filter(p => !servedNormalizedSet.has(normalizePrompt(p)));
+        if (unservedCurated.length > 0) {
+            candidate = unservedCurated[Math.floor(Math.random() * unservedCurated.length)];
+        } else {
+            // If all 36 curated prompts were somehow exhausted in 30 days, pick a random curated prompt
+            candidate = CURATED_PROMPTS[Math.floor(Math.random() * CURATED_PROMPTS.length)];
+        }
+    }
+
+    // 4. Record chosen prompt in history
+    try {
+        await supabase.from('journal_prompts_history').insert({
+            user_id: userId,
+            prompt_text: candidate,
+            category: 'daily_reflection',
+            served_at: new Date().toISOString(),
+        });
+    } catch (insertErr) {
+        console.error('[Record Prompt History Error]:', insertErr);
+    }
+
+    return candidate;
+}
+
+// ==========================================
 // Streak Calculation Helper
 // ==========================================
 
@@ -686,6 +825,10 @@ async function processIncomingMessage(message: any, senderPhone: string): Promis
 
         switch (actionId) {
             // Tier 1 Sub-menu triggers
+            case 'menu_main':
+                await sendMainMenu(senderPhone);
+                break;
+
             case 'menu_today': {
                 // Fetch today's entry to provide deterministic state
                 const { data: todayEntry } = await supabase
@@ -831,13 +974,15 @@ async function processIncomingMessage(message: any, senderPhone: string): Promis
 
             case 'act_idea_prompt':
             case 'btn_idea_prompt': {
-                const prompt = await callGemini(
-                    "Give one extremely short, warm, delightful daily reflection question. Under 10 words. Simple and human."
-                );
-                const question = prompt || "What made you smile today?";
-                await sendTextMessage(
+                const question = await getUniqueJournalPrompt(userId);
+                await sendInteractiveButtons(
                     senderPhone,
-                    `💡 Today's Idea:\n"${question}"\n\nJust reply to this message with your answer, or drop a voice memo!`
+                    `💡 Today's Idea:\n\n"${question}"\n\nReply directly with your answer, or drop a voice memo!`,
+                    [
+                        { id: 'act_write_note', title: '✍️ Write Line' },
+                        { id: 'btn_idea_prompt', title: '🔄 Another Idea' },
+                        { id: 'menu_main', title: '🏠 Main Menu' },
+                    ]
                 );
                 break;
             }
