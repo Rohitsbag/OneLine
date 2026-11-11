@@ -104,31 +104,73 @@ async function sendMainMenu(to: string, userName?: string) {
     const greeting = userName ? `Hi ${userName}!` : 'Hi there!';
     return sendInteractiveList(
         to,
-        `${greeting} What would you like to do? Select an option or simply reply with any thought, photo, or voice memo.`,
-        'Choose an Option',
+        `${greeting} Welcome to OneLine. What would you like to do? Select an option or simply reply directly with a thought, photo, or voice memo.`,
+        'Main Menu',
         [
             {
-                title: 'Write & Capture',
+                title: 'OneLine Diary',
                 rows: [
-                    { id: 'act_add_today', title: "Add to Today's Note", description: 'Send a quick text, photo, or voice memo' },
-                    { id: 'act_write_yesterday', title: 'Write for Yesterday', description: 'Forgot yesterday? Add it here' },
-                    { id: 'act_idea_prompt', title: 'Need an Idea to Write?', description: 'Get a fun, friendly question' },
+                    { id: 'menu_today', title: "Today's Diary", description: 'Write note, Photo of the Day, or Voice Note' },
+                    { id: 'menu_memories', title: 'Read Memories', description: "Today's note, yesterday, or past memories" },
+                    { id: 'act_idea_prompt', title: 'Need an Idea to Write?', description: 'Get a friendly daily reflection question' },
+                    { id: 'menu_tools', title: 'Tools & Settings', description: 'Streak, PDF book download, reminder time' },
                 ],
             },
+        ]
+    );
+}
+
+async function sendTodaySubMenu(to: string) {
+    return sendInteractiveList(
+        to,
+        "📅 Today's Diary Options:\nChoose an option below, or simply send text, a photo, or a voice note anytime.",
+        'Today Options',
+        [
             {
-                title: 'Read & Remember',
+                title: 'Capture Today',
                 rows: [
-                    { id: 'act_read_today', title: "Read Today's Note", description: "See what you've saved today" },
-                    { id: 'act_past_memory', title: 'Time Machine', description: 'What you wrote on this day in past' },
-                    { id: 'act_week_summary', title: 'My Week in 3 Sentences', description: 'Friendly 7-day AI summary' },
+                    { id: 'act_write_note', title: 'Write Note of the Day', description: 'Type or replace your single daily line' },
+                    { id: 'act_photo_day', title: 'Photo of the Day', description: 'Save or update your single daily photo' },
+                    { id: 'act_voice_day', title: 'Voice Note of the Day', description: 'Send voice note with auto-transcription' },
+                    { id: 'act_write_yesterday', title: 'Write for Yesterday', description: 'Catch up on yesterday’s diary' },
                 ],
             },
+        ]
+    );
+}
+
+async function sendMemoriesSubMenu(to: string) {
+    return sendInteractiveList(
+        to,
+        "📖 Read Your Diary:\nSelect an entry or reflection to read back:",
+        'Read Memories',
+        [
             {
-                title: 'Diary Tools',
+                title: 'Memories & Reflections',
                 rows: [
-                    { id: 'act_streak', title: 'My Diary Streak', description: 'See how many days in a row' },
-                    { id: 'act_download_pdf', title: 'Download My Diary', description: 'Get a printable PDF diary book' },
-                    { id: 'act_change_reminder', title: 'Change Reminder Time', description: 'Pick when we remind you each night' },
+                    { id: 'act_read_today', title: "Read Today's Entry", description: 'View your note, photo, and voice memo' },
+                    { id: 'act_read_yesterday', title: "Read Yesterday's Entry", description: 'Check what you captured yesterday' },
+                    { id: 'act_past_memory', title: 'Time Machine', description: 'What you wrote on this day in past years' },
+                    { id: 'act_week_summary', title: 'My Week in 3 Sentences', description: 'Friendly 7-day AI recap of your week' },
+                ],
+            },
+        ]
+    );
+}
+
+async function sendToolsSubMenu(to: string) {
+    return sendInteractiveList(
+        to,
+        "⚙️ Diary Tools & Settings:\nManage your OneLine diary preferences:",
+        'Tools & Settings',
+        [
+            {
+                title: 'Tools & Settings',
+                rows: [
+                    { id: 'act_streak', title: 'My Diary Streak', description: 'See how many days in a row you have journaled' },
+                    { id: 'act_download_pdf', title: 'Download Diary (PDF)', description: 'Export a printable PDF diary book' },
+                    { id: 'act_change_reminder', title: 'Change Reminder Time', description: 'Pick when we gently remind you each night' },
+                    { id: 'act_unlink', title: 'Disconnect WhatsApp', description: 'Unlink your WhatsApp from OneLine' },
                 ],
             },
         ]
@@ -483,11 +525,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const actionId = interactive?.list_reply?.id || interactive?.button_reply?.id;
 
         switch (actionId) {
+            // Tier 1 Sub-menu triggers
+            case 'menu_today':
+                await sendTodaySubMenu(senderPhone);
+                break;
+
+            case 'menu_memories':
+                await sendMemoriesSubMenu(senderPhone);
+                break;
+
+            case 'menu_tools':
+                await sendToolsSubMenu(senderPhone);
+                break;
+
+            // Today's Diary sub-menu actions
+            case 'act_write_note':
             case 'act_add_today':
             case 'btn_write_now':
                 await sendTextMessage(
                     senderPhone,
-                    "✍️ Just reply right here with any thought, photo, or voice note. I'll add it straight to today's diary!"
+                    "✍️ Note of the Day:\nReply directly with your sentence or thought. You can write your main line or add to it anytime!"
+                );
+                break;
+
+            case 'act_photo_day':
+                await sendTextMessage(
+                    senderPhone,
+                    "📸 Photo of the Day:\nSend any photo here to save it as today's memory. (Sending a new photo will replace your Photo of the Day)."
+                );
+                break;
+
+            case 'act_voice_day':
+                await sendTextMessage(
+                    senderPhone,
+                    "🎙️ Voice Note of the Day:\nRecord and send a voice memo here. It will be saved to your diary and automatically transcribed for you!"
                 );
                 break;
 
@@ -812,8 +883,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     .eq('date', targetDate)
                     .single();
 
-                const existingMedia = existing?.media_items || [];
-                const newMedia = [...existingMedia, { type: 'image', url: photoUrl }];
+                // Keep non-image media (e.g. voiceover) and replace any existing image
+                const nonImageMedia = (existing?.media_items || []).filter((m: any) => m.type !== 'image');
+                const newMedia = [...nonImageMedia, { type: 'image', url: photoUrl }];
 
                 let updatedContent = existing?.content || '';
                 if (caption) {
@@ -833,7 +905,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                 await sendTextMessage(
                     senderPhone,
-                    `✓ Photo anchored to ${isYesterday ? "yesterday's" : "today's"} diary! 📸${caption ? `\n\n"${caption}"` : ''}`
+                    `✓ Photo of the Day saved for ${isYesterday ? "yesterday" : "today"}! 📸${caption ? `\n\n"${caption}"` : ''}`
                 );
             }
         } catch (mediaErr) {
@@ -887,8 +959,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     .eq('date', targetDate)
                     .single();
 
-                const existingMedia = existing?.media_items || [];
-                const newMedia = [...existingMedia, { type: 'audio', url: audioUrl }];
+                // Keep non-audio media (e.g. photo) and replace any existing audio
+                const nonAudioMedia = (existing?.media_items || []).filter((m: any) => m.type !== 'audio');
+                const newMedia = [...nonAudioMedia, { type: 'audio', url: audioUrl }];
 
                 let updatedContent = existing?.content || '';
                 if (transcription) {
@@ -908,7 +981,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                 await sendTextMessage(
                     senderPhone,
-                    `✓ Listened and saved to ${isYesterday ? "yesterday's" : "today's"} diary! 🎙️\n\n"${transcription || 'Audio memo recorded.'}"`
+                    `✓ Voice Note of the Day saved for ${isYesterday ? "yesterday" : "today"}! 🎙️\n\n"${transcription || 'Voice memo saved.'}"`
                 );
             }
         } catch (audioErr) {
