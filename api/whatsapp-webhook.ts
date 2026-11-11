@@ -615,6 +615,19 @@ async function getRawBody(req: VercelRequest): Promise<Buffer> {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
+        if (req.method === 'GET' && req.query['debug'] === '1') {
+            return res.status(200).json({
+                nodeVersion: process.version,
+                hasSupabaseUrl: Boolean(SUPABASE_URL),
+                hasServiceRoleKey: Boolean(SUPABASE_SERVICE_ROLE_KEY),
+                hasWhatsappToken: Boolean(WHATSAPP_ACCESS_TOKEN),
+                hasPhoneId: Boolean(WHATSAPP_PHONE_NUMBER_ID),
+                hasSecret: Boolean(WHATSAPP_APP_SECRET),
+                hasGeminiKey: Boolean(GEMINI_API_KEY),
+                supabaseInitialized: Boolean(supabase),
+            });
+        }
+
         // 1. GET: Webhook Challenge Verification from Meta Console
         if (req.method === 'GET') {
             const mode = req.query['hub.mode'];
