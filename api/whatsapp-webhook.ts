@@ -614,138 +614,151 @@ async function getRawBody(req: VercelRequest): Promise<Buffer> {
 // ==========================================
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-    // 1. GET: Webhook Challenge Verification from Meta Console
-    if (req.method === 'GET') {
-        const mode = req.query['hub.mode'];
-        const token = req.query['hub.verify_token'];
-        const challenge = req.query['hub.challenge'];
-
-        if (mode === 'subscribe' && token === WHATSAPP_VERIFY_TOKEN) {
-            return res.status(200).send(challenge);
-        }
-        return res.status(403).send('Forbidden');
-    }
-
-    if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method not allowed' });
-    }
-
-    // 2. Strict Raw HMAC-SHA256 Signature Verification
-    if (!WHATSAPP_APP_SECRET) {
-        console.error('[WhatsApp Webhook Security] Fail closed: WHATSAPP_APP_SECRET is not configured.');
-        return res.status(500).json({ error: 'Server security configuration error' });
-    }
-
-    let rawBuffer: Buffer;
     try {
-        rawBuffer = await getRawBody(req);
-    } catch (readErr) {
-        console.error('[WhatsApp Webhook Security] Failed reading raw request body stream:', readErr);
-        return res.status(400).json({ error: 'Unable to read request stream' });
-    }
+        // 1. GET: Webhook Challenge Verification from Meta Console
+        if (req.method === 'GET') {
+            const mode = req.query['hub.mode'];
+            const token = req.query['hub.verify_token'];
+            const challenge = req.query['hub.challenge'];
 
-    const signature = req.headers['x-hub-signature-256'] as string;
-    if (!signature || !signature.startsWith('sha256=')) {
-        console.warn('[WhatsApp Webhook Security] Rejected: Missing or malformed x-hub-signature-256 header.');
-        return res.status(401).json({ error: 'Missing or invalid signature header' });
-    }
-
-    const expectedSig = 'sha256=' + createHmac('sha256', WHATSAPP_APP_SECRET).update(rawBuffer).digest('hex');
-    const signatureBuffer = Buffer.from(signature, 'utf8');
-    const expectedBuffer = Buffer.from(expectedSig, 'utf8');
-
-    if (signatureBuffer.length !== expectedBuffer.length || !timingSafeEqual(signatureBuffer, expectedBuffer)) {
-        console.warn('[WhatsApp Webhook Security] Rejected: Cryptographic HMAC signature mismatch.');
-        return res.status(401).json({ error: 'Invalid webhook signature' });
-    }
-
-    // Parse verified raw buffer into JSON
-    let body: any;
-    try {
-        body = JSON.parse(rawBuffer.toString('utf8'));
-    } catch (jsonErr) {
-        console.error('[WhatsApp Webhook] Invalid JSON payload in verified body:', jsonErr);
-        return res.status(400).json({ error: 'Malformed JSON payload' });
-    }
-
-    const entry = body?.entry?.[0];
-    const changes = entry?.changes?.[0]?.value;
-    const message = changes?.messages?.[0];
-
-    // Status updates (delivered, read) or empty pings - acknowledge immediately
-    if (!message) {
-        return res.status(200).json({ status: 'ok' });
-    }
-
-    const messageId = message.id;
-    const senderPhone = message.from; // e.g. "919876543210"
-
-    if (!supabase) {
-        console.error('[WhatsApp Webhook] Supabase client uninitialized');
-        return res.status(500).json({
-            error: 'Supabase client uninitialized',
-            hasUrl: Boolean(SUPABASE_URL),
-            hasKey: Boolean(SUPABASE_SERVICE_ROLE_KEY)
-        });
-    }
-
-    // 3. Atomic Fenced Idempotency Claim (180-second lease to support voice/transcription safely)
-    let fenceToken: string | null = null;
-    if (messageId) {
-        const { data: claimData, error: claimErr } = await supabase.rpc('claim_whatsapp_message_fenced', {
-            p_message_id: messageId,
-            p_lease_seconds: 180,
-        });
-
-        if (claimErr) {
-            console.error('[WhatsApp Idempotency] Fenced claim error:', claimErr);
-            return res.status(500).json({ error: 'Database lease claim failure' });
+            if (mode === 'subscribe' && token === WHATSAPP_VERIFY_TOKEN) {
+                return res.status(200).send(challenge);
+            }
+            return res.status(403).send('Forbidden');
         }
 
-        const claimResult = claimData?.[0]?.result || 'claimed';
-        fenceToken = claimData?.[0]?.fence_token || null;
-
-        if (claimResult === 'completed') {
-            return res.status(200).json({ status: 'already_completed' });
+        if (req.method !== 'POST') {
+            return res.status(405).json({ error: 'Method not allowed' });
         }
 
-        if (claimResult === 'in_flight') {
-            // Signal Meta with 429 so Meta retries after jitter/backoff, rather than silently dropping
-            return res.status(429).json({ status: 'currently_processing' });
+        // 2. Strict Raw HMAC-SHA256 Signature Verification
+        if (!WHATSAPP_APP_SECRET) {
+            console.error('[WhatsApp Webhook Security] Fail closed: WHATSAPP_APP_SECRET is not configured.');
+            return res.status(500).json({ error: 'Server security configuration error' });
         }
 
-        if (claimResult !== 'claimed' || !fenceToken) {
-            return res.status(200).json({ status: 'ignored' });
+        let rawBuffer: Buffer;
+        try {
+            rawBuffer = await getRawBody(req);
+        } catch (readErr) {
+            console.error('[WhatsApp Webhook Security] Failed reading raw request body stream:', readErr);
+            return res.status(400).json({ error: 'Unable to read request stream' });
         }
-    }
 
-    // Wrap message processing in try/catch to record completion or failure with fencing token
-    try {
-        const processResult = await processIncomingMessage(message, senderPhone);
-        if (messageId && fenceToken) {
-            const { data: compSuccess, error: compErr } = await supabase.rpc('complete_whatsapp_message_fenced', {
-                p_message_id: messageId,
-                p_fence_token: fenceToken,
+        const signature = req.headers['x-hub-signature-256'] as string;
+        if (!signature || !signature.startsWith('sha256=')) {
+            console.warn('[WhatsApp Webhook Security] Rejected: Missing or malformed x-hub-signature-256 header.');
+            return res.status(401).json({ error: 'Missing or invalid signature header' });
+        }
+
+        const expectedSig = 'sha256=' + createHmac('sha256', WHATSAPP_APP_SECRET).update(rawBuffer).digest('hex');
+        const signatureBuffer = Buffer.from(signature, 'utf8');
+        const expectedBuffer = Buffer.from(expectedSig, 'utf8');
+
+        if (signatureBuffer.length !== expectedBuffer.length || !timingSafeEqual(signatureBuffer, expectedBuffer)) {
+            console.warn('[WhatsApp Webhook Security] Rejected: Cryptographic HMAC signature mismatch.');
+            return res.status(401).json({ error: 'Invalid webhook signature' });
+        }
+
+        // Parse verified raw buffer into JSON
+        let body: any;
+        try {
+            body = JSON.parse(rawBuffer.toString('utf8'));
+        } catch (jsonErr) {
+            console.error('[WhatsApp Webhook] Invalid JSON payload in verified body:', jsonErr);
+            return res.status(400).json({ error: 'Malformed JSON payload' });
+        }
+
+        const entry = body?.entry?.[0];
+        const changes = entry?.changes?.[0]?.value;
+        const message = changes?.messages?.[0];
+
+        // Status updates (delivered, read) or empty pings - acknowledge immediately
+        if (!message) {
+            return res.status(200).json({ status: 'ok' });
+        }
+
+        const messageId = message.id;
+        const senderPhone = message.from; // e.g. "919876543210"
+
+        if (!supabase) {
+            console.error('[WhatsApp Webhook] Supabase client uninitialized');
+            return res.status(500).json({
+                error: 'Supabase client uninitialized',
+                hasUrl: Boolean(SUPABASE_URL),
+                hasKey: Boolean(SUPABASE_SERVICE_ROLE_KEY)
             });
-            if (compErr || !compSuccess) {
-                console.error(`[WhatsApp Webhook] Failure: Lease expired or token mismatch during complete for ${messageId}`);
-                // Do not acknowledge 200 if completion state could not be committed
-                return res.status(500).json({ error: 'Failed committing completion lease state' });
+        }
+
+        // 3. Atomic Fenced Idempotency Claim (180-second lease to support voice/transcription safely)
+        let fenceToken: string | null = null;
+        if (messageId) {
+            const { data: claimData, error: claimErr } = await supabase.rpc('claim_whatsapp_message_fenced', {
+                p_message_id: messageId,
+                p_lease_seconds: 180,
+            });
+
+            if (claimErr) {
+                console.error('[WhatsApp Idempotency] Fenced claim error:', claimErr);
+                return res.status(500).json({ error: 'Database lease claim failure', details: claimErr.message });
+            }
+
+            const claimResult = claimData?.[0]?.result || 'claimed';
+            fenceToken = claimData?.[0]?.fence_token || null;
+
+            if (claimResult === 'completed') {
+                return res.status(200).json({ status: 'already_completed' });
+            }
+
+            if (claimResult === 'in_flight') {
+                // Signal Meta with 429 so Meta retries after jitter/backoff, rather than silently dropping
+                return res.status(429).json({ status: 'currently_processing' });
+            }
+
+            if (claimResult !== 'claimed' || !fenceToken) {
+                return res.status(200).json({ status: 'ignored' });
             }
         }
-        return res.status(200).json({ status: processResult || 'ok' });
-    } catch (err: any) {
-        console.error(`[WhatsApp Message Processing Error for ${messageId}]:`, err);
-        if (messageId && fenceToken) {
-            await supabase.rpc('fail_whatsapp_message_fenced', {
-                p_message_id: messageId,
-                p_fence_token: fenceToken,
-                p_error: err?.message || String(err),
-            });
+
+        // Wrap message processing in try/catch to record completion or failure with fencing token
+        try {
+            const processResult = await processIncomingMessage(message, senderPhone);
+            if (messageId && fenceToken) {
+                const { data: compSuccess, error: compErr } = await supabase.rpc('complete_whatsapp_message_fenced', {
+                    p_message_id: messageId,
+                    p_fence_token: fenceToken,
+                });
+                if (compErr || !compSuccess) {
+                    console.error(`[WhatsApp Webhook] Failure: Lease expired or token mismatch during complete for ${messageId}`);
+                    return res.status(500).json({ error: 'Failed committing completion lease state' });
+                }
+            }
+            return res.status(200).json({ status: processResult || 'ok' });
+        } catch (err: any) {
+            console.error(`[WhatsApp Message Processing Error for ${messageId}]:`, err);
+            if (messageId && fenceToken) {
+                try {
+                    await supabase.rpc('fail_whatsapp_message_fenced', {
+                        p_message_id: messageId,
+                        p_fence_token: fenceToken,
+                        p_error: err?.message || String(err),
+                    });
+                } catch (failRpcErr) {
+                    console.error('[fail_whatsapp_message_fenced RPC error]:', failRpcErr);
+                }
+            }
+            // Return 500 so Meta automatically retries transient errors
+            return res.status(500).json({ error: 'Message processing error, queued for retry', details: err?.message });
         }
-        // Return 500 so Meta automatically retries transient errors
-        return res.status(500).json({ error: 'Message processing error, queued for retry' });
+    } catch (fatalError: any) {
+        console.error('[FATAL Webhook Error]:', fatalError);
+        return res.status(500).json({
+            error: 'Fatal webhook crash caught',
+            message: fatalError?.message || String(fatalError),
+            stack: fatalError?.stack || null
+        });
     }
+}
 }
 
 async function processIncomingMessage(message: any, senderPhone: string): Promise<string> {
