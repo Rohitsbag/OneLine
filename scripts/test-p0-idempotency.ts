@@ -29,22 +29,24 @@ async function runIdempotencyTests() {
 
     try {
         // TEST 5: Brand new message claims successfully
-        const { data: claim1 } = await supabase.rpc('claim_whatsapp_message', {
+        const { data: claim1 } = await supabase.rpc('claim_whatsapp_message_fenced', {
             p_message_id: testMsgId,
             p_lease_seconds: 3, // short lease for testing
         });
-        assert('5. Brand new message is claimed atomically (status=processing)', claim1 === 'claimed');
+        const token1 = claim1?.[0]?.fence_token;
+        assert('5. Brand new message is claimed atomically (status=processing)', claim1?.[0]?.result === 'claimed' && Boolean(token1));
 
         // TEST 6: Concurrent in-flight request is rejected while lease is active
-        const { data: claim2 } = await supabase.rpc('claim_whatsapp_message', {
+        const { data: claim2 } = await supabase.rpc('claim_whatsapp_message_fenced', {
             p_message_id: testMsgId,
             p_lease_seconds: 3,
         });
-        assert('6. Concurrent message is rejected as in_flight under active lease', claim2 === 'in_flight');
+        assert('6. Concurrent message is rejected as in_flight under active lease', claim2?.[0]?.result === 'in_flight');
 
         // TEST 7: Simulated failure marks status=failed and allows safe retry
-        await supabase.rpc('fail_whatsapp_message', {
+        await supabase.rpc('fail_whatsapp_message_fenced', {
             p_message_id: testMsgId,
+            p_fence_token: token1,
             p_error: 'Simulated network timeout during audio download',
         });
         
@@ -56,31 +58,36 @@ async function runIdempotencyTests() {
         assert('7. Failed message records error and status=failed', failedRow?.status === 'failed' && failedRow?.error?.includes('Simulated network'));
 
         // TEST 8: Retry after failure succeeds and re-claims lock
-        const { data: claimRetry } = await supabase.rpc('claim_whatsapp_message', {
+        const { data: claimRetry } = await supabase.rpc('claim_whatsapp_message_fenced', {
             p_message_id: testMsgId,
             p_lease_seconds: 3,
         });
-        assert('8. Failed message can be retried and successfully re-claimed', claimRetry === 'claimed');
+        const token2 = claimRetry?.[0]?.fence_token;
+        assert('8. Failed message can be retried and successfully re-claimed', claimRetry?.[0]?.result === 'claimed' && Boolean(token2));
 
         // TEST 9: Expired lease can be reclaimed
         // Wait 3.5 seconds for lease to expire
         console.log('   Waiting 3.5s for lease expiration...');
         await new Promise((r) => setTimeout(r, 3500));
 
-        const { data: claimReclaimed } = await supabase.rpc('claim_whatsapp_message', {
+        const { data: claimReclaimed } = await supabase.rpc('claim_whatsapp_message_fenced', {
             p_message_id: testMsgId,
             p_lease_seconds: 3,
         });
-        assert('9. Expired lease is reclaimed safely by worker retry', claimReclaimed === 'claimed');
+        const token3 = claimReclaimed?.[0]?.fence_token;
+        assert('9. Expired lease is reclaimed safely by worker retry', claimReclaimed?.[0]?.result === 'claimed' && Boolean(token3));
 
         // TEST 10: Completion marks status=completed and permanently blocks further duplicates
-        await supabase.rpc('complete_whatsapp_message', { p_message_id: testMsgId });
+        await supabase.rpc('complete_whatsapp_message_fenced', { 
+            p_message_id: testMsgId,
+            p_fence_token: token3
+        });
         
-        const { data: claimAfterComplete } = await supabase.rpc('claim_whatsapp_message', {
+        const { data: claimAfterComplete } = await supabase.rpc('claim_whatsapp_message_fenced', {
             p_message_id: testMsgId,
             p_lease_seconds: 3,
         });
-        assert('10. Completed message permanently rejects future duplicates (completed)', claimAfterComplete === 'completed');
+        assert('10. Completed message permanently rejects future duplicates (completed)', claimAfterComplete?.[0]?.result === 'completed');
 
         // TEST 11: Historical records remain protected
         const { data: historicalCheck } = await supabase

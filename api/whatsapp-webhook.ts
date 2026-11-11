@@ -577,7 +577,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 p_fence_token: fenceToken,
             });
             if (compErr || !compSuccess) {
-                console.warn(`[WhatsApp Webhook] Warning: Complete fence token mismatch for ${messageId}`);
+                console.error(`[WhatsApp Webhook] Failure: Lease expired or token mismatch during complete for ${messageId}`);
+                // Do not acknowledge 200 if completion state could not be committed
+                return res.status(500).json({ error: 'Failed committing completion lease state' });
             }
         }
         return res.status(200).json({ status: processResult || 'ok' });
@@ -1075,19 +1077,23 @@ async function processIncomingMessage(message: any, senderPhone: string): Promis
         }
 
         // Fetch existing entry for target date
-        const { data: existing } = await supabase
+        const { data: existing, error: fetchErr } = await supabase
             .from('entries')
             .select('content, media_items')
             .eq('user_id', userId)
             .eq('date', targetDate)
-            .single();
+            .maybeSingle();
+
+        if (fetchErr) {
+            throw new Error(`Failed reading entry for ${targetDate}: ${fetchErr.message}`);
+        }
 
         let updatedContent = text;
         if (!isReplacing && existing?.content) {
             updatedContent = `${existing.content}\n\n${text}`;
         }
 
-        await supabase
+        const { error: upsertErr } = await supabase
             .from('entries')
             .upsert({
                 user_id: userId,
@@ -1095,6 +1101,10 @@ async function processIncomingMessage(message: any, senderPhone: string): Promis
                 content: updatedContent,
                 updated_at: new Date().toISOString(),
             }, { onConflict: 'user_id,date' });
+
+        if (upsertErr) {
+            throw new Error(`Failed saving text note to entries: ${upsertErr.message}`);
+        }
 
         const streak = await calculateStreak(userId, todayStr);
         await sendTextMessage(
@@ -1111,70 +1121,87 @@ async function processIncomingMessage(message: any, senderPhone: string): Promis
 
         if (!imageId) return 'no_image_id';
 
-        try {
-            // Get Image URL from Meta Graph API
-            const metaMediaResp = await fetch(`https://graph.facebook.com/v19.0/${imageId}`, {
-                headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
-            });
-            const metaMediaData = await metaMediaResp.json();
-            const downloadUrl = metaMediaData?.url;
-
-            if (downloadUrl) {
-                // Download image buffer
-                const imgBufferResp = await fetch(downloadUrl, {
-                    headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
-                });
-                const imgArrayBuffer = await imgBufferResp.arrayBuffer();
-                const buffer = Buffer.from(imgArrayBuffer);
-
-                const storagePath = `photos/${userId}/${targetDate}/${imageId}.jpg`;
-                await supabase.storage
-                    .from('journal-media-private')
-                    .upload(storagePath, buffer, { contentType: 'image/jpeg', upsert: true });
-
-                const { data: signed } = await supabase.storage
-                    .from('journal-media-private')
-                    .createSignedUrl(storagePath, 60 * 60 * 24 * 365);
-
-                const photoUrl = signed?.signedUrl || storagePath;
-
-                // Fetch existing entry
-                const { data: existing } = await supabase
-                    .from('entries')
-                    .select('content, media_items')
-                    .eq('user_id', userId)
-                    .eq('date', targetDate)
-                    .single();
-
-                // Keep non-image media (e.g. voiceover) and replace any existing image
-                const nonImageMedia = (existing?.media_items || []).filter((m: any) => m.type !== 'image');
-                const newMedia = [...nonImageMedia, { type: 'image', url: photoUrl }];
-
-                let updatedContent = existing?.content || '';
-                if (caption) {
-                    updatedContent = updatedContent ? `${updatedContent}\n\n${caption}` : caption;
-                }
-
-                await supabase
-                    .from('entries')
-                    .upsert({
-                        user_id: userId,
-                        date: targetDate,
-                        content: updatedContent,
-                        media_items: newMedia,
-                        image_url: photoUrl,
-                        updated_at: new Date().toISOString(),
-                    }, { onConflict: 'user_id,date' });
-
-                await sendTextMessage(
-                    senderPhone,
-                    `✓ Photo of the Day saved for ${isYesterday ? "yesterday" : "today"}! 📸${caption ? `\n\n"${caption}"` : ''}`
-                );
-            }
-        } catch (mediaErr) {
-            console.error('[Media Process Error]:', mediaErr);
-            await sendTextMessage(senderPhone, "Couldn't download that photo, but I've noted your message!");
+        // 1. Get Image URL from Meta Graph API
+        const metaMediaResp = await fetch(`https://graph.facebook.com/v19.0/${imageId}`, {
+            headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
+        });
+        if (!metaMediaResp.ok) {
+            throw new Error(`Failed fetching media metadata from Meta: ${metaMediaResp.status}`);
         }
+        const metaMediaData = await metaMediaResp.json();
+        const downloadUrl = metaMediaData?.url;
+        if (!downloadUrl) throw new Error('Meta media URL missing');
+
+        // 2. Download image buffer
+        const imgBufferResp = await fetch(downloadUrl, {
+            headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
+        });
+        if (!imgBufferResp.ok) {
+            throw new Error(`Failed downloading photo buffer from Meta: ${imgBufferResp.status}`);
+        }
+        const imgArrayBuffer = await imgBufferResp.arrayBuffer();
+        const buffer = Buffer.from(imgArrayBuffer);
+
+        // 3. Upload to Supabase Storage
+        const storagePath = `photos/${userId}/${targetDate}/${imageId}.jpg`;
+        const { error: uploadErr } = await supabase.storage
+            .from('journal-media-private')
+            .upload(storagePath, buffer, { contentType: 'image/jpeg', upsert: true });
+
+        if (uploadErr) {
+            throw new Error(`Failed uploading photo to private storage: ${uploadErr.message}`);
+        }
+
+        const { data: signed, error: signErr } = await supabase.storage
+            .from('journal-media-private')
+            .createSignedUrl(storagePath, 60 * 60 * 24 * 365);
+
+        if (signErr) {
+            throw new Error(`Failed signing photo URL: ${signErr.message}`);
+        }
+
+        const photoUrl = signed?.signedUrl || storagePath;
+
+        // 4. Fetch existing entry
+        const { data: existing, error: entryFetchErr } = await supabase
+            .from('entries')
+            .select('content, media_items')
+            .eq('user_id', userId)
+            .eq('date', targetDate)
+            .maybeSingle();
+
+        if (entryFetchErr) {
+            throw new Error(`Failed fetching existing entry for photo: ${entryFetchErr.message}`);
+        }
+
+        // Keep non-image media (e.g. voiceover) and replace any existing image
+        const nonImageMedia = (existing?.media_items || []).filter((m: any) => m.type !== 'image');
+        const newMedia = [...nonImageMedia, { type: 'image', url: photoUrl }];
+
+        let updatedContent = existing?.content || '';
+        if (caption) {
+            updatedContent = updatedContent ? `${updatedContent}\n\n${caption}` : caption;
+        }
+
+        const { error: entryUpsertErr } = await supabase
+            .from('entries')
+            .upsert({
+                user_id: userId,
+                date: targetDate,
+                content: updatedContent,
+                media_items: newMedia,
+                image_url: photoUrl,
+                updated_at: new Date().toISOString(),
+            }, { onConflict: 'user_id,date' });
+
+        if (entryUpsertErr) {
+            throw new Error(`Failed saving photo to entries table: ${entryUpsertErr.message}`);
+        }
+
+        await sendTextMessage(
+            senderPhone,
+            `✓ Photo of the Day saved for ${isYesterday ? "yesterday" : "today"}! 📸${caption ? `\n\n"${caption}"` : ''}`
+        );
         return 'image_saved';
     }
 
@@ -1183,77 +1210,96 @@ async function processIncomingMessage(message: any, senderPhone: string): Promis
         const audioId = message.audio?.id || message.voice?.id;
         if (!audioId) return 'no_audio_id';
 
-        try {
-            const metaMediaResp = await fetch(`https://graph.facebook.com/v19.0/${audioId}`, {
-                headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
-            });
-            const metaMediaData = await metaMediaResp.json();
-            const downloadUrl = metaMediaData?.url;
-
-            if (downloadUrl) {
-                const audioBufferResp = await fetch(downloadUrl, {
-                    headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
-                });
-                const audioArrayBuffer = await audioBufferResp.arrayBuffer();
-                const buffer = Buffer.from(audioArrayBuffer);
-                const base64Audio = buffer.toString('base64');
-
-                const storagePath = `audio/${userId}/${targetDate}/${audioId}.ogg`;
-                await supabase.storage
-                    .from('journal-media-private')
-                    .upload(storagePath, buffer, { contentType: 'audio/ogg', upsert: true });
-
-                const { data: signed } = await supabase.storage
-                    .from('journal-media-private')
-                    .createSignedUrl(storagePath, 60 * 60 * 24 * 365);
-
-                const audioUrl = signed?.signedUrl || storagePath;
-
-                // Transcribe audio using Gemini Flash
-                const transcription = await callGemini(
-                    "Please transcribe this voice recording verbatim. Return only the spoken words without extra commentary.",
-                    { mimeType: 'audio/ogg', base64: base64Audio }
-                );
-
-                const { data: existing } = await supabase
-                    .from('entries')
-                    .select('content, media_items')
-                    .eq('user_id', userId)
-                    .eq('date', targetDate)
-                    .single();
-
-                // Keep non-audio media (e.g. photo) and replace any existing audio
-                const nonAudioMedia = (existing?.media_items || []).filter((m: any) => m.type !== 'audio');
-                const newMedia = [...nonAudioMedia, { type: 'audio', url: audioUrl }];
-
-                let updatedContent = existing?.content || '';
-                if (transcription) {
-                    updatedContent = updatedContent ? `${updatedContent}\n\n${transcription}` : transcription;
-                }
-
-                await supabase
-                    .from('entries')
-                    .upsert({
-                        user_id: userId,
-                        date: targetDate,
-                        content: updatedContent,
-                        media_items: newMedia,
-                        audio_url: audioUrl,
-                        updated_at: new Date().toISOString(),
-                    }, { onConflict: 'user_id,date' });
-
-                await sendTextMessage(
-                    senderPhone,
-                    `✓ Voice Note of the Day saved for ${isYesterday ? "yesterday" : "today"}! 🎙️\n\n"${transcription || 'Voice memo saved.'}"`
-                );
-            }
-        } catch (audioErr) {
-            console.error('[Audio Process Error]:', audioErr);
-            await sendTextMessage(senderPhone, "Couldn't process that voice memo. Please try again!");
+        // 1. Get Audio URL from Meta Graph API
+        const metaMediaResp = await fetch(`https://graph.facebook.com/v19.0/${audioId}`, {
+            headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
+        });
+        if (!metaMediaResp.ok) {
+            throw new Error(`Failed fetching audio metadata from Meta: ${metaMediaResp.status}`);
         }
+        const metaMediaData = await metaMediaResp.json();
+        const downloadUrl = metaMediaData?.url;
+        if (!downloadUrl) throw new Error('Meta audio URL missing');
+
+        // 2. Download audio buffer
+        const audioBufferResp = await fetch(downloadUrl, {
+            headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
+        });
+        if (!audioBufferResp.ok) {
+            throw new Error(`Failed downloading audio buffer from Meta: ${audioBufferResp.status}`);
+        }
+        const audioArrayBuffer = await audioBufferResp.arrayBuffer();
+        const buffer = Buffer.from(audioArrayBuffer);
+        const base64Audio = buffer.toString('base64');
+
+        // 3. Upload to Supabase Storage
+        const storagePath = `audio/${userId}/${targetDate}/${audioId}.ogg`;
+        const { error: uploadErr } = await supabase.storage
+            .from('journal-media-private')
+            .upload(storagePath, buffer, { contentType: 'audio/ogg', upsert: true });
+
+        if (uploadErr) {
+            throw new Error(`Failed uploading audio to storage: ${uploadErr.message}`);
+        }
+
+        const { data: signed, error: signErr } = await supabase.storage
+            .from('journal-media-private')
+            .createSignedUrl(storagePath, 60 * 60 * 24 * 365);
+
+        if (signErr) {
+            throw new Error(`Failed signing audio URL: ${signErr.message}`);
+        }
+
+        const audioUrl = signed?.signedUrl || storagePath;
+
+        // 4. Transcribe audio using Gemini Flash
+        const transcription = await callGemini(
+            "Please transcribe this voice recording verbatim. Return only the spoken words without extra commentary.",
+            { mimeType: 'audio/ogg', base64: base64Audio }
+        );
+
+        // 5. Fetch existing entry
+        const { data: existing, error: entryFetchErr } = await supabase
+            .from('entries')
+            .select('content, media_items')
+            .eq('user_id', userId)
+            .eq('date', targetDate)
+            .maybeSingle();
+
+        if (entryFetchErr) {
+            throw new Error(`Failed fetching existing entry for audio: ${entryFetchErr.message}`);
+        }
+
+        // Keep non-audio media (e.g. photo) and replace any existing audio
+        const nonAudioMedia = (existing?.media_items || []).filter((m: any) => m.type !== 'audio');
+        const newMedia = [...nonAudioMedia, { type: 'audio', url: audioUrl }];
+
+        let updatedContent = existing?.content || '';
+        if (transcription) {
+            updatedContent = updatedContent ? `${updatedContent}\n\n${transcription}` : transcription;
+        }
+
+        const { error: entryUpsertErr } = await supabase
+            .from('entries')
+            .upsert({
+                user_id: userId,
+                date: targetDate,
+                content: updatedContent,
+                media_items: newMedia,
+                audio_url: audioUrl,
+                updated_at: new Date().toISOString(),
+            }, { onConflict: 'user_id,date' });
+
+        if (entryUpsertErr) {
+            throw new Error(`Failed saving audio note to entries table: ${entryUpsertErr.message}`);
+        }
+
+        await sendTextMessage(
+            senderPhone,
+            `✓ Voice Note of the Day saved for ${isYesterday ? "yesterday" : "today"}! 🎙️\n\n"${transcription || 'Voice memo saved.'}"`
+        );
         return 'audio_saved';
     }
 
     return 'unhandled_type';
-}
 }

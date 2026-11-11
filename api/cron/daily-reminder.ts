@@ -57,15 +57,14 @@ async function sendWhatsAppButtons(
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-    // 1. Authenticate Cron Caller (Strictly require CRON_SECRET)
+    // 1. Authenticate Cron Caller (Strictly require Authorization header with CRON_SECRET)
     if (!CRON_SECRET) {
         console.error('[Daily Reminder Cron] CRON_SECRET is not configured on server');
         return res.status(500).json({ error: 'Server cron security configuration missing' });
     }
 
     const authHeader = req.headers.authorization;
-    const queryKey = req.query.key;
-    if (authHeader !== `Bearer ${CRON_SECRET}` && queryKey !== CRON_SECRET) {
+    if (authHeader !== `Bearer ${CRON_SECRET}`) {
         return res.status(401).json({ error: 'Unauthorized cron trigger' });
     }
 
@@ -93,20 +92,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const reminderTime = user.reminder_time || '21:00'; // HH:mm
             const targetHour = parseInt(reminderTime.split(':')[0], 10);
 
-            // Check if user currently has an active snooze
-            if (user.snoozed_until) {
-                const snoozedUntilDate = new Date(user.snoozed_until);
-                if (now.getTime() < snoozedUntilDate.getTime()) {
-                    continue; // Snooze is still active, skip sending for now
-                } else {
-                    // Snooze period has elapsed; clear snooze so reminder triggers
-                    await supabase
-                        .from('user_settings')
-                        .update({ snoozed_until: null })
-                        .eq('user_id', user.user_id);
-                }
-            }
-
             // Compute user's local hour and today date string
             const hourFormatter = new Intl.DateTimeFormat('en-US', {
                 timeZone: tz,
@@ -123,15 +108,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             });
             const todayStr = dateFormatter.format(now);
 
-            // Trigger if current hour matches target hour and haven't reminded today
-            if (currentLocalHour === targetHour && user.last_reminded_date !== todayStr) {
+            // Determine if user is eligible to be reminded right now:
+            // Condition A: User explicitly snoozed and the snooze time has arrived/passed
+            // Condition B: Current local hour matches user's reminder hour AND they haven't been reminded today
+            let isEligible = false;
+
+            if (user.snoozed_until) {
+                const snoozedUntilDate = new Date(user.snoozed_until);
+                if (now.getTime() >= snoozedUntilDate.getTime()) {
+                    isEligible = true;
+                    // Clear the snooze since we are acting on it now
+                    await supabase
+                        .from('user_settings')
+                        .update({ snoozed_until: null })
+                        .eq('user_id', user.user_id);
+                }
+            } else if (currentLocalHour === targetHour && user.last_reminded_date !== todayStr) {
+                isEligible = true;
+            }
+
+            if (isEligible) {
                 // Smart Skip: Check if user has already written today
-                const { data: entry } = await supabase
+                const { data: entry, error: entryErr } = await supabase
                     .from('entries')
                     .select('id, content, media_items')
                     .eq('user_id', user.user_id)
                     .eq('date', todayStr)
-                    .single();
+                    .maybeSingle();
+
+                if (entryErr) {
+                    console.error(`[Reminder Check Entry Error for ${user.user_id}]:`, entryErr);
+                    continue;
+                }
 
                 const hasWritten = entry && (entry.content?.trim() || entry.media_items?.length);
                 if (hasWritten) {
