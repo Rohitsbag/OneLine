@@ -11,7 +11,7 @@ export const config = {
 };
 
 // Configuration
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
@@ -21,10 +21,12 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
 // Fail-closed server privilege client: strictly require service role key
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    console.error('[WhatsApp Webhook Config Error] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+    console.error('[WhatsApp Webhook Config Error] Fail closed: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabase = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    : (null as unknown as ReturnType<typeof createClient>);
 
 // ==========================================
 // Meta Graph API Message Senders
@@ -32,26 +34,22 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 async function sendWhatsAppRaw(payload: Record<string, any>) {
     if (!WHATSAPP_ACCESS_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
-        console.warn('[WhatsApp] Credentials missing. Would send:', JSON.stringify(payload));
-        return;
+        throw new Error('[WhatsApp] Missing WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID');
     }
     const url = `https://graph.facebook.com/v19.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
-    try {
-        const resp = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-        });
-        if (!resp.ok) {
-            const errBody = await resp.text();
-            console.error('[WhatsApp Send Error]:', resp.status, errBody);
-        }
-    } catch (err) {
-        console.error('[WhatsApp Send Exception]:', err);
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    });
+    if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`[WhatsApp Outbound Error ${resp.status}]: ${errBody}`);
     }
+    return resp.json();
 }
 
 async function sendTextMessage(to: string, text: string) {
@@ -61,6 +59,29 @@ async function sendTextMessage(to: string, text: string) {
         to,
         type: 'text',
         text: { preview_url: false, body: text },
+    });
+}
+
+async function sendInteractiveButtons(
+    to: string,
+    bodyText: string,
+    buttons: Array<{ id: string; title: string }>
+) {
+    return sendWhatsAppRaw({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'button',
+            body: { text: bodyText },
+            action: {
+                buttons: buttons.slice(0, 3).map(btn => ({
+                    type: 'reply',
+                    reply: { id: btn.id, title: btn.title.slice(0, 20) },
+                })),
+            },
+        },
     });
 }
 
@@ -113,19 +134,19 @@ async function sendDocumentMessage(to: string, link: string, filename: string, c
 }
 
 async function sendMainMenu(to: string, userName?: string) {
-    const greeting = userName ? `Hi ${userName}!` : 'Hi there!';
+    const greeting = userName ? `Hi ${userName}!` : 'Hi!';
     return sendInteractiveList(
         to,
-        `${greeting} Welcome to OneLine. What would you like to do? Select an option or simply reply directly with a thought, photo, or voice memo.`,
+        `${greeting} Welcome to OneLine. What would you like to do?`,
         'Main Menu',
         [
             {
                 title: 'OneLine Diary',
                 rows: [
-                    { id: 'menu_today', title: "Today's Diary", description: 'Write note, Photo of the Day, or Voice Note' },
-                    { id: 'menu_memories', title: 'Read Memories', description: "Today's note, yesterday, or past memories" },
-                    { id: 'act_idea_prompt', title: 'Need an Idea to Write?', description: 'Get a friendly daily reflection question' },
-                    { id: 'menu_tools', title: 'More Options', description: 'Streak, PDF book download, reminder time & settings' },
+                    { id: 'menu_today', title: "Today's Diary", description: 'Write a line, add a photo or record a voice note' },
+                    { id: 'menu_memories', title: 'Read Memories', description: 'Revisit today, yesterday and older memories' },
+                    { id: 'act_idea_prompt', title: 'Get a Writing Idea', description: 'Get a simple question to reflect on your day' },
+                    { id: 'menu_tools', title: 'Tools & Settings', description: 'Streak, diary PDF, reminders and account settings' },
                 ],
             },
         ]
@@ -143,7 +164,7 @@ async function sendTodaySubMenu(
 
     return sendInteractiveList(
         to,
-        `${dayEmojis} Today's Diary Options:\nChoose an option below, or simply send text, a photo, or a voice note anytime.`,
+        `${dayEmojis} Today's Diary:\nChoose what you'd like to capture.`,
         'Today Options',
         [
             {
@@ -151,25 +172,25 @@ async function sendTodaySubMenu(
                 rows: [
                     {
                         id: 'act_write_note',
-                        title: hasNote ? '✏️ Edit / Replace Note' : '✍️ Write Note of the Day',
+                        title: hasNote ? "Replace Today's Line" : "Write Today's Line",
                         description: hasNote
-                            ? (statusInfo?.notePreview ? `Current: "${statusInfo.notePreview.slice(0, 45)}..."` : 'Update today\'s sentence')
-                            : 'Type your single daily line',
+                            ? (statusInfo?.notePreview ? `Current: "${statusInfo.notePreview.slice(0, 45)}..."` : 'Replace today\'s line')
+                            : 'Write your daily journal entry',
                     },
                     {
                         id: 'act_photo_day',
-                        title: hasPhoto ? '🔄 Replace Photo of Day' : '📸 Photo of the Day',
-                        description: hasPhoto ? 'Photo already saved. Send new to replace' : 'Save today\'s single photo memory',
+                        title: hasPhoto ? 'Replace Photo of Day' : 'Photo of the Day',
+                        description: hasPhoto ? 'Photo already saved. Send new to replace' : 'Add today\'s single photo',
                     },
                     {
                         id: 'act_voice_day',
-                        title: hasAudio ? '🔄 Replace Voice Note' : '🎙️ Voice Note of the Day',
-                        description: hasAudio ? 'Voice memo saved. Send new to update' : 'Voice note with auto-transcription',
+                        title: hasAudio ? 'Replace Voice Note' : 'Voice Note of the Day',
+                        description: hasAudio ? 'Voice memo saved. Send new to replace' : 'Record a thought. Auto-transcribed',
                     },
                     {
                         id: 'act_write_yesterday',
-                        title: '⏪ Write for Yesterday',
-                        description: 'Catch up on yesterday’s diary',
+                        title: 'Write for Yesterday',
+                        description: 'Catch up on yesterday’s entry',
                     },
                 ],
             },
@@ -180,7 +201,7 @@ async function sendTodaySubMenu(
 async function sendMemoriesSubMenu(to: string) {
     return sendInteractiveList(
         to,
-        "📖 Read Your Diary:\nSelect an entry or reflection to read back:",
+        "📖 Read Memories:\nSelect an entry or reflection to revisit:",
         'Read Memories',
         [
             {
@@ -199,16 +220,16 @@ async function sendMemoriesSubMenu(to: string) {
 async function sendToolsSubMenu(to: string) {
     return sendInteractiveList(
         to,
-        "✨ More Options & Settings:\nManage your OneLine diary preferences:",
-        'More Options',
+        "⚙️ Tools & Settings:\nManage your diary preferences and features:",
+        'Tools & Settings',
         [
             {
-                title: 'More Options',
+                title: 'Tools & Settings',
                 rows: [
                     { id: 'act_streak', title: 'My Diary Streak', description: 'See how many days in a row you have journaled' },
                     { id: 'act_download_pdf', title: 'Download Diary (PDF)', description: 'Export a printable PDF diary book' },
                     { id: 'act_change_reminder', title: 'Change Reminder Time', description: 'Pick when we gently remind you each night' },
-                    { id: 'act_unlink', title: 'Disconnect WhatsApp', description: 'Unlink your WhatsApp from OneLine' },
+                    { id: 'act_unlink_request', title: 'Disconnect WhatsApp', description: 'Unlink your WhatsApp from OneLine' },
                 ],
             },
         ]
@@ -517,52 +538,64 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const messageId = message.id;
     const senderPhone = message.from; // e.g. "919876543210"
 
-    // 3. Atomic Idempotency Claim with Leases
+    // 3. Atomic Fenced Idempotency Claim (180-second lease to support voice/transcription safely)
+    let fenceToken: string | null = null;
     if (messageId) {
-        const { data: claimResult, error: claimErr } = await supabase.rpc('claim_whatsapp_message', {
+        const { data: claimData, error: claimErr } = await supabase.rpc('claim_whatsapp_message_fenced', {
             p_message_id: messageId,
-            p_lease_seconds: 60,
+            p_lease_seconds: 180,
         });
 
         if (claimErr) {
-            console.error('[WhatsApp Idempotency] RPC claim error:', claimErr);
-            // Fail open for DB RPC outage or reject? Reject with 500 to let Meta retry safely
+            console.error('[WhatsApp Idempotency] Fenced claim error:', claimErr);
             return res.status(500).json({ error: 'Database lease claim failure' });
         }
+
+        const claimResult = claimData?.[0]?.result || 'claimed';
+        fenceToken = claimData?.[0]?.fence_token || null;
 
         if (claimResult === 'completed') {
             return res.status(200).json({ status: 'already_completed' });
         }
 
         if (claimResult === 'in_flight') {
-            return res.status(200).json({ status: 'currently_processing' });
+            // Signal Meta with 429 so Meta retries after jitter/backoff, rather than silently dropping
+            return res.status(429).json({ status: 'currently_processing' });
         }
 
-        if (claimResult !== 'claimed') {
+        if (claimResult !== 'claimed' || !fenceToken) {
             return res.status(200).json({ status: 'ignored' });
         }
     }
 
-    // Wrap execution in try/catch to record completion or failure in state machine
+    // Wrap message processing in try/catch to record completion or failure with fencing token
     try {
-        await processIncomingMessage(message, senderPhone, res);
-        if (messageId) {
-            await supabase.rpc('complete_whatsapp_message', { p_message_id: messageId });
+        const processResult = await processIncomingMessage(message, senderPhone);
+        if (messageId && fenceToken) {
+            const { data: compSuccess, error: compErr } = await supabase.rpc('complete_whatsapp_message_fenced', {
+                p_message_id: messageId,
+                p_fence_token: fenceToken,
+            });
+            if (compErr || !compSuccess) {
+                console.warn(`[WhatsApp Webhook] Warning: Complete fence token mismatch for ${messageId}`);
+            }
         }
+        return res.status(200).json({ status: processResult || 'ok' });
     } catch (err: any) {
         console.error(`[WhatsApp Message Processing Error for ${messageId}]:`, err);
-        if (messageId) {
-            await supabase.rpc('fail_whatsapp_message', {
+        if (messageId && fenceToken) {
+            await supabase.rpc('fail_whatsapp_message_fenced', {
                 p_message_id: messageId,
+                p_fence_token: fenceToken,
                 p_error: err?.message || String(err),
             });
         }
-        // Return 500 so Meta will retry if it was a transient error (e.g. Gemini timeout, network blip)
+        // Return 500 so Meta automatically retries transient errors
         return res.status(500).json({ error: 'Message processing error, queued for retry' });
     }
 }
 
-async function processIncomingMessage(message: any, senderPhone: string, res: VercelResponse) {
+async function processIncomingMessage(message: any, senderPhone: string): Promise<string> {
 
     // 4. One-Time Pairing Check: "LINK 123456"
     const textBody = message.text?.body?.trim() || '';
@@ -584,7 +617,7 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
                 senderPhone,
                 "⚠️ That pairing code is invalid or has expired.\n\nPlease open OneLine Settings and click 'Connect WhatsApp' to get a fresh 6-digit code."
             );
-            return res.status(200).json({ status: 'pair_failed' });
+            return 'pair_failed';
         }
 
         // Successfully pair phone to user
@@ -602,7 +635,7 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
             "🎉 Connected to your OneLine diary!\n\nYou're all set. Anything you send here—thoughts, photos, or voice notes—becomes part of your private diary."
         );
         await sendMainMenu(senderPhone);
-        return res.status(200).json({ status: 'paired' });
+        return 'paired';
     }
 
     // 5. Look up User by Phone Number
@@ -617,7 +650,7 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
             senderPhone,
             "Hi there! 👋 Your WhatsApp number isn't connected to a OneLine account yet.\n\nOpen your OneLine app on your phone or computer, tap Settings, and click 'Connect WhatsApp' to start."
         );
-        return res.status(200).json({ status: 'unregistered' });
+        return 'unregistered';
     }
 
     const userId = user.user_id;
@@ -685,7 +718,35 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
             case 'act_write_note':
             case 'act_add_today':
             case 'btn_write_now': {
-                // If user already has a note today, set pending replace state
+                // Check if user already has an existing note
+                const { data: currentEntry } = await supabase
+                    .from('entries')
+                    .select('content')
+                    .eq('user_id', userId)
+                    .eq('date', todayStr)
+                    .single();
+
+                if (currentEntry?.content?.trim()) {
+                    // Ask confirmation before setting replace mode
+                    await sendInteractiveButtons(
+                        senderPhone,
+                        `You already have a line saved for today:\n"${currentEntry.content}"\n\nWould you like to replace it with a new line or add to it?`,
+                        [
+                            { id: 'confirm_replace_note', title: '🔄 Replace Line' },
+                            { id: 'confirm_append_note', title: '➕ Add to Line' },
+                            { id: 'cancel_action', title: 'Cancel' },
+                        ]
+                    );
+                } else {
+                    await sendTextMessage(
+                        senderPhone,
+                        "✍️ Write Today's Line:\nReply directly with your sentence or thought for today."
+                    );
+                }
+                break;
+            }
+
+            case 'confirm_replace_note':
                 await supabase
                     .from('user_settings')
                     .update({
@@ -693,13 +754,36 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
                         whatsapp_pending_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
                     })
                     .eq('user_id', userId);
-
                 await sendTextMessage(
                     senderPhone,
-                    "✍️ Note of the Day:\nReply directly with your sentence or thought. Your next message will become today's note!"
+                    "🔄 Ready to replace! Reply directly with your new line, and it will overwrite today's note."
                 );
                 break;
-            }
+
+            case 'confirm_append_note':
+                await supabase
+                    .from('user_settings')
+                    .update({
+                        whatsapp_pending_action: null,
+                        whatsapp_pending_expires_at: null,
+                    })
+                    .eq('user_id', userId);
+                await sendTextMessage(
+                    senderPhone,
+                    "➕ Reply directly with what you'd like to add, and I'll append it to today's note!"
+                );
+                break;
+
+            case 'cancel_action':
+                await supabase
+                    .from('user_settings')
+                    .update({
+                        whatsapp_pending_action: null,
+                        whatsapp_pending_expires_at: null,
+                    })
+                    .eq('user_id', userId);
+                await sendTextMessage(senderPhone, 'Cancelled! Your diary remains untouched.');
+                break;
 
             case 'act_photo_day':
                 await sendTextMessage(
@@ -746,9 +830,9 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
             case 'act_idea_prompt':
             case 'btn_idea_prompt': {
                 const prompt = await callGemini(
-                    "Give one short, delightful, friendly daily journaling prompt for an ordinary person reflecting on their day. Keep it simple and warm. Max 20 words."
+                    "Give one extremely short, warm, delightful daily reflection question. Under 10 words. Simple and human."
                 );
-                const question = prompt || "What was the happiest or most surprising moment of your day?";
+                const question = prompt || "What made you smile today?";
                 await sendTextMessage(
                     senderPhone,
                     `💡 Today's Idea:\n"${question}"\n\nJust reply to this message with your answer, or drop a voice memo!`
@@ -930,6 +1014,18 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
                 break;
             }
 
+            case 'act_unlink_request':
+                await sendInteractiveButtons(
+                    senderPhone,
+                    "⚠️ Are you sure you want to disconnect WhatsApp from your OneLine diary?\n\nYou can always reconnect anytime from Settings.",
+                    [
+                        { id: 'act_unlink_confirm', title: 'Yes, Disconnect' },
+                        { id: 'cancel_action', title: 'Cancel' },
+                    ]
+                );
+                break;
+
+            case 'act_unlink_confirm':
             case 'act_unlink': {
                 await supabase
                     .from('user_settings')
@@ -942,26 +1038,40 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
                 break;
             }
 
-            case 'btn_snooze_1h':
-                await sendTextMessage(senderPhone, '⏰ Snoozed! I will remind you again in 1 hour.');
+            case 'btn_snooze_1h': {
+                // Compute 1 hour in future
+                const snoozedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+                await supabase
+                    .from('user_settings')
+                    .update({
+                        snoozed_until: snoozedUntil,
+                        last_reminded_date: null, // Allow reminder to fire again when snooze passes
+                    })
+                    .eq('user_id', userId);
+
+                await sendTextMessage(
+                    senderPhone,
+                    '⏰ Snoozed! I will gently check back in with you in 1 hour.'
+                );
                 break;
+            }
 
             default:
                 await sendMainMenu(senderPhone);
                 break;
         }
-        return res.status(200).json({ status: 'interactive_processed' });
+        return 'interactive_processed';
     }
 
     // 7. Handle Text Journal Messages
     if (message.type === 'text') {
         const text = message.text?.body?.trim();
-        if (!text) return res.status(200).json({ status: 'empty_text' });
+        if (!text) return 'empty_text';
 
         // Trigger menu on greetings or help keywords
         if (['hi', 'hello', 'hey', 'menu', 'help', 'options', 'start'].includes(text.toLowerCase())) {
             await sendMainMenu(senderPhone);
-            return res.status(200).json({ status: 'menu_sent' });
+            return 'menu_sent';
         }
 
         // Fetch existing entry for target date
@@ -991,7 +1101,7 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
             senderPhone,
             `✓ Saved to ${isYesterday ? "yesterday's" : "today's"} diary! (${targetFriendly})\n\n"${text}"\n\n🔥 You're on a ${streak}-day streak!`
         );
-        return res.status(200).json({ status: 'text_saved' });
+        return 'text_saved';
     }
 
     // 8. Handle Photo Journal Messages
@@ -999,7 +1109,7 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
         const imageId = message.image?.id;
         const caption = message.image?.caption || '';
 
-        if (!imageId) return res.status(200).json({ status: 'no_image_id' });
+        if (!imageId) return 'no_image_id';
 
         try {
             // Get Image URL from Meta Graph API
@@ -1065,13 +1175,13 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
             console.error('[Media Process Error]:', mediaErr);
             await sendTextMessage(senderPhone, "Couldn't download that photo, but I've noted your message!");
         }
-        return res.status(200).json({ status: 'image_saved' });
+        return 'image_saved';
     }
 
     // 9. Handle Voice Memo Messages
     if (message.type === 'audio' || message.type === 'voice') {
         const audioId = message.audio?.id || message.voice?.id;
-        if (!audioId) return res.status(200).json({ status: 'no_audio_id' });
+        if (!audioId) return 'no_audio_id';
 
         try {
             const metaMediaResp = await fetch(`https://graph.facebook.com/v19.0/${audioId}`, {
@@ -1141,8 +1251,9 @@ async function processIncomingMessage(message: any, senderPhone: string, res: Ve
             console.error('[Audio Process Error]:', audioErr);
             await sendTextMessage(senderPhone, "Couldn't process that voice memo. Please try again!");
         }
-        return res.status(200).json({ status: 'audio_saved' });
+        return 'audio_saved';
     }
 
-    return res.status(200).json({ status: 'unhandled_type' });
+    return 'unhandled_type';
+}
 }
