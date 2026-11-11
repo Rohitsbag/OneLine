@@ -605,12 +605,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // Today's Diary sub-menu actions
             case 'act_write_note':
             case 'act_add_today':
-            case 'btn_write_now':
+            case 'btn_write_now': {
+                // If user already has a note today, set pending replace state
+                await supabase
+                    .from('user_settings')
+                    .update({
+                        whatsapp_pending_action: 'replace_today',
+                        whatsapp_pending_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+                    })
+                    .eq('user_id', userId);
+
                 await sendTextMessage(
                     senderPhone,
-                    "✍️ Note of the Day:\nReply directly with your sentence or thought. You can write your main line or add to it anytime!"
+                    "✍️ Note of the Day:\nReply directly with your sentence or thought. Your next message will become today's note!"
                 );
                 break;
+            }
 
             case 'act_photo_day':
                 await sendTextMessage(
