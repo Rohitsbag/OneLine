@@ -759,7 +759,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
     }
 }
-}
 
 async function processIncomingMessage(message: any, senderPhone: string): Promise<string> {
 
