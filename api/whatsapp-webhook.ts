@@ -1,18 +1,30 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
+// Disable Vercel automatic JSON body parser to preserve raw bytes for HMAC verification
+export const config = {
+    api: {
+        bodyParser: false,
+    },
+};
+
 // Configuration
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || '';
 const WHATSAPP_APP_SECRET = process.env.WHATSAPP_APP_SECRET || '';
-const GEMINI_API_KEY = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// Fail-closed server privilege client: strictly require service role key
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.error('[WhatsApp Webhook Config Error] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // ==========================================
 // Meta Graph API Message Senders
@@ -425,6 +437,19 @@ async function generateMonthlyDiaryPdf(userId: string, targetMonthStr: string): 
 // Main Webhook Handler
 // ==========================================
 
+// Helper: Read raw request buffer from stream
+async function getRawBody(req: VercelRequest): Promise<Buffer> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    }
+    return Buffer.concat(chunks);
+}
+
+// ==========================================
+// Main Webhook Handler
+// ==========================================
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 1. GET: Webhook Challenge Verification from Meta Console
     if (req.method === 'GET') {
@@ -442,19 +467,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    // 2. Cryptographic HMAC-SHA256 Signature Verification
-    if (WHATSAPP_APP_SECRET) {
-        const signature = req.headers['x-hub-signature-256'] as string;
-        if (signature) {
-            const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-            const expectedSig = 'sha256=' + createHmac('sha256', WHATSAPP_APP_SECRET).update(rawBody).digest('hex');
-            if (signature !== expectedSig) {
-                console.warn('[WhatsApp Webhook] Note: Signature hash differs due to Vercel JSON re-serialization');
-            }
-        }
+    // 2. Strict Raw HMAC-SHA256 Signature Verification
+    if (!WHATSAPP_APP_SECRET) {
+        console.error('[WhatsApp Webhook Security] Fail closed: WHATSAPP_APP_SECRET is not configured.');
+        return res.status(500).json({ error: 'Server security configuration error' });
     }
 
-    const body = req.body;
+    let rawBuffer: Buffer;
+    try {
+        rawBuffer = await getRawBody(req);
+    } catch (readErr) {
+        console.error('[WhatsApp Webhook Security] Failed reading raw request body stream:', readErr);
+        return res.status(400).json({ error: 'Unable to read request stream' });
+    }
+
+    const signature = req.headers['x-hub-signature-256'] as string;
+    if (!signature || !signature.startsWith('sha256=')) {
+        console.warn('[WhatsApp Webhook Security] Rejected: Missing or malformed x-hub-signature-256 header.');
+        return res.status(401).json({ error: 'Missing or invalid signature header' });
+    }
+
+    const expectedSig = 'sha256=' + createHmac('sha256', WHATSAPP_APP_SECRET).update(rawBuffer).digest('hex');
+    const signatureBuffer = Buffer.from(signature, 'utf8');
+    const expectedBuffer = Buffer.from(expectedSig, 'utf8');
+
+    if (signatureBuffer.length !== expectedBuffer.length || !timingSafeEqual(signatureBuffer, expectedBuffer)) {
+        console.warn('[WhatsApp Webhook Security] Rejected: Cryptographic HMAC signature mismatch.');
+        return res.status(401).json({ error: 'Invalid webhook signature' });
+    }
+
+    // Parse verified raw buffer into JSON
+    let body: any;
+    try {
+        body = JSON.parse(rawBuffer.toString('utf8'));
+    } catch (jsonErr) {
+        console.error('[WhatsApp Webhook] Invalid JSON payload in verified body:', jsonErr);
+        return res.status(400).json({ error: 'Malformed JSON payload' });
+    }
+
     const entry = body?.entry?.[0];
     const changes = entry?.changes?.[0]?.value;
     const message = changes?.messages?.[0];
@@ -467,23 +517,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const messageId = message.id;
     const senderPhone = message.from; // e.g. "919876543210"
 
-    // 3. Idempotency Check (prevent duplicate processing on Meta retries)
+    // 3. Atomic Idempotency Claim with Leases
     if (messageId) {
-        const { data: existingMsg } = await supabase
-            .from('whatsapp_processed_messages')
-            .select('id')
-            .eq('id', messageId)
-            .single();
+        const { data: claimResult, error: claimErr } = await supabase.rpc('claim_whatsapp_message', {
+            p_message_id: messageId,
+            p_lease_seconds: 60,
+        });
 
-        if (existingMsg) {
-            return res.status(200).json({ status: 'already_processed' });
+        if (claimErr) {
+            console.error('[WhatsApp Idempotency] RPC claim error:', claimErr);
+            // Fail open for DB RPC outage or reject? Reject with 500 to let Meta retry safely
+            return res.status(500).json({ error: 'Database lease claim failure' });
         }
 
-        // Record message ID as processed
-        await supabase
-            .from('whatsapp_processed_messages')
-            .insert({ id: messageId });
+        if (claimResult === 'completed') {
+            return res.status(200).json({ status: 'already_completed' });
+        }
+
+        if (claimResult === 'in_flight') {
+            return res.status(200).json({ status: 'currently_processing' });
+        }
+
+        if (claimResult !== 'claimed') {
+            return res.status(200).json({ status: 'ignored' });
+        }
     }
+
+    // Wrap execution in try/catch to record completion or failure in state machine
+    try {
+        await processIncomingMessage(message, senderPhone, res);
+        if (messageId) {
+            await supabase.rpc('complete_whatsapp_message', { p_message_id: messageId });
+        }
+    } catch (err: any) {
+        console.error(`[WhatsApp Message Processing Error for ${messageId}]:`, err);
+        if (messageId) {
+            await supabase.rpc('fail_whatsapp_message', {
+                p_message_id: messageId,
+                p_error: err?.message || String(err),
+            });
+        }
+        // Return 500 so Meta will retry if it was a transient error (e.g. Gemini timeout, network blip)
+        return res.status(500).json({ error: 'Message processing error, queued for retry' });
+    }
+}
+
+async function processIncomingMessage(message: any, senderPhone: string, res: VercelResponse) {
 
     // 4. One-Time Pairing Check: "LINK 123456"
     const textBody = message.text?.body?.trim() || '';
