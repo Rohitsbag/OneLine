@@ -11,8 +11,8 @@ export const config = {
 };
 
 // Configuration
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '';
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || '';
@@ -21,7 +21,10 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
 // Fail-closed server privilege client: strictly require service role key
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    console.error('[WhatsApp Webhook Config Error] Fail closed: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+    console.error('[WhatsApp Webhook Config Error] Missing Supabase config:', {
+        hasUrl: Boolean(SUPABASE_URL),
+        hasKey: Boolean(SUPABASE_SERVICE_ROLE_KEY),
+    });
 }
 
 const supabase = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
@@ -676,6 +679,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const messageId = message.id;
     const senderPhone = message.from; // e.g. "919876543210"
+
+    if (!supabase) {
+        console.error('[WhatsApp Webhook] Supabase client uninitialized');
+        return res.status(500).json({
+            error: 'Supabase client uninitialized',
+            hasUrl: Boolean(SUPABASE_URL),
+            hasKey: Boolean(SUPABASE_SERVICE_ROLE_KEY)
+        });
+    }
 
     // 3. Atomic Fenced Idempotency Claim (180-second lease to support voice/transcription safely)
     let fenceToken: string | null = null;

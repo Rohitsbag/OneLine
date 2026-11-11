@@ -2,14 +2,17 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
 // Configuration: Strictly server-side
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '';
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 const CRON_SECRET = process.env.CRON_SECRET || '';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    console.error('[Daily Reminder Cron] Fail closed: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+    console.error('[Daily Reminder Cron] Missing Supabase config:', {
+        hasUrl: Boolean(SUPABASE_URL),
+        hasKey: Boolean(SUPABASE_SERVICE_ROLE_KEY),
+    });
 }
 
 const supabase = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
