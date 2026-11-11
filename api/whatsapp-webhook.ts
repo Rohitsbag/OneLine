@@ -113,26 +113,52 @@ async function sendMainMenu(to: string, userName?: string) {
                     { id: 'menu_today', title: "Today's Diary", description: 'Write note, Photo of the Day, or Voice Note' },
                     { id: 'menu_memories', title: 'Read Memories', description: "Today's note, yesterday, or past memories" },
                     { id: 'act_idea_prompt', title: 'Need an Idea to Write?', description: 'Get a friendly daily reflection question' },
-                    { id: 'menu_tools', title: 'Tools & Settings', description: 'Streak, PDF book download, reminder time' },
+                    { id: 'menu_tools', title: 'More Options', description: 'Streak, PDF book download, reminder time & settings' },
                 ],
             },
         ]
     );
 }
 
-async function sendTodaySubMenu(to: string) {
+async function sendTodaySubMenu(
+    to: string,
+    dayEmojis: string = '1️⃣1️⃣',
+    statusInfo?: { hasNote: boolean; hasPhoto: boolean; hasAudio: boolean; notePreview?: string }
+) {
+    const hasNote = statusInfo?.hasNote ?? false;
+    const hasPhoto = statusInfo?.hasPhoto ?? false;
+    const hasAudio = statusInfo?.hasAudio ?? false;
+
     return sendInteractiveList(
         to,
-        "📅 Today's Diary Options:\nChoose an option below, or simply send text, a photo, or a voice note anytime.",
+        `${dayEmojis} Today's Diary Options:\nChoose an option below, or simply send text, a photo, or a voice note anytime.`,
         'Today Options',
         [
             {
                 title: 'Capture Today',
                 rows: [
-                    { id: 'act_write_note', title: 'Write Note of the Day', description: 'Type or replace your single daily line' },
-                    { id: 'act_photo_day', title: 'Photo of the Day', description: 'Save or update your single daily photo' },
-                    { id: 'act_voice_day', title: 'Voice Note of the Day', description: 'Send voice note with auto-transcription' },
-                    { id: 'act_write_yesterday', title: 'Write for Yesterday', description: 'Catch up on yesterday’s diary' },
+                    {
+                        id: 'act_write_note',
+                        title: hasNote ? '✏️ Edit / Replace Note' : '✍️ Write Note of the Day',
+                        description: hasNote
+                            ? (statusInfo?.notePreview ? `Current: "${statusInfo.notePreview.slice(0, 45)}..."` : 'Update today\'s sentence')
+                            : 'Type your single daily line',
+                    },
+                    {
+                        id: 'act_photo_day',
+                        title: hasPhoto ? '🔄 Replace Photo of Day' : '📸 Photo of the Day',
+                        description: hasPhoto ? 'Photo already saved. Send new to replace' : 'Save today\'s single photo memory',
+                    },
+                    {
+                        id: 'act_voice_day',
+                        title: hasAudio ? '🔄 Replace Voice Note' : '🎙️ Voice Note of the Day',
+                        description: hasAudio ? 'Voice memo saved. Send new to update' : 'Voice note with auto-transcription',
+                    },
+                    {
+                        id: 'act_write_yesterday',
+                        title: '⏪ Write for Yesterday',
+                        description: 'Catch up on yesterday’s diary',
+                    },
                 ],
             },
         ]
@@ -161,11 +187,11 @@ async function sendMemoriesSubMenu(to: string) {
 async function sendToolsSubMenu(to: string) {
     return sendInteractiveList(
         to,
-        "⚙️ Diary Tools & Settings:\nManage your OneLine diary preferences:",
-        'Tools & Settings',
+        "✨ More Options & Settings:\nManage your OneLine diary preferences:",
+        'More Options',
         [
             {
-                title: 'Tools & Settings',
+                title: 'More Options',
                 rows: [
                     { id: 'act_streak', title: 'My Diary Streak', description: 'See how many days in a row you have journaled' },
                     { id: 'act_download_pdf', title: 'Download Diary (PDF)', description: 'Export a printable PDF diary book' },
@@ -180,6 +206,22 @@ async function sendToolsSubMenu(to: string) {
 // ==========================================
 // Date & Timezone Helpers
 // ==========================================
+
+function getNumberEmojis(num: number | string): string {
+    const emojiMap: Record<string, string> = {
+        '0': '0️⃣',
+        '1': '1️⃣',
+        '2': '2️⃣',
+        '3': '3️⃣',
+        '4': '4️⃣',
+        '5': '5️⃣',
+        '6': '6️⃣',
+        '7': '7️⃣',
+        '8': '8️⃣',
+        '9': '9️⃣',
+    };
+    return String(num).split('').map(ch => emojiMap[ch] || ch).join('');
+}
 
 function getDatesForTimezone(tz = 'Asia/Kolkata') {
     const now = new Date();
@@ -203,7 +245,11 @@ function getDatesForTimezone(tz = 'Asia/Kolkata') {
     const todayFriendly = friendlyFormatter.format(now);
     const yesterdayFriendly = friendlyFormatter.format(yesterdayDate);
 
-    return { todayStr, yesterdayStr, todayFriendly, yesterdayFriendly };
+    // Extract day number for emoji representation (e.g. 11 -> 1️⃣1️⃣)
+    const dayNumber = new Intl.DateTimeFormat('en-US', { timeZone: tz, day: 'numeric' }).format(now);
+    const dayEmojis = getNumberEmojis(dayNumber);
+
+    return { todayStr, yesterdayStr, todayFriendly, yesterdayFriendly, dayEmojis };
 }
 
 // ==========================================
@@ -497,7 +543,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const userId = user.user_id;
     const tz = user.timezone || 'Asia/Kolkata';
-    const { todayStr, yesterdayStr, todayFriendly, yesterdayFriendly } = getDatesForTimezone(tz);
+    const { todayStr, yesterdayStr, todayFriendly, yesterdayFriendly, dayEmojis } = getDatesForTimezone(tz);
 
     // Check pending action (e.g. write_yesterday, replace_today)
     let isYesterday = false;
@@ -526,9 +572,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         switch (actionId) {
             // Tier 1 Sub-menu triggers
-            case 'menu_today':
-                await sendTodaySubMenu(senderPhone);
+            case 'menu_today': {
+                // Fetch today's entry to provide deterministic state
+                const { data: todayEntry } = await supabase
+                    .from('entries')
+                    .select('content, media_items')
+                    .eq('user_id', userId)
+                    .eq('date', todayStr)
+                    .single();
+
+                const hasNote = Boolean(todayEntry?.content?.trim());
+                const hasPhoto = Boolean(todayEntry?.media_items?.some((m: any) => m.type === 'image'));
+                const hasAudio = Boolean(todayEntry?.media_items?.some((m: any) => m.type === 'audio'));
+
+                await sendTodaySubMenu(senderPhone, dayEmojis, {
+                    hasNote,
+                    hasPhoto,
+                    hasAudio,
+                    notePreview: todayEntry?.content,
+                });
                 break;
+            }
 
             case 'menu_memories':
                 await sendMemoriesSubMenu(senderPhone);
